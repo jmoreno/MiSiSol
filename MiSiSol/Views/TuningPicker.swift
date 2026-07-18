@@ -15,11 +15,12 @@ struct TuningPicker: View {
     @State private var customNotes: [Note]
 
     /// Todas las notas seleccionables en el desplegable de afinación personalizada, ordenadas
-    /// de más grave a más aguda (octavas 0 a 7). Una sola lista con nota+octava combinadas,
-    /// en vez de dos controles separados (nombre de nota y octava).
+    /// de más grave a más aguda (octavas 0 a 7).
     private static let selectableNotes: [Note] = (0...7).flatMap { octave in
         Note.noteNames.compactMap { name in Note.make(name: name, octave: octave) }
     }
+    private static let minSelectableSemitones = selectableNotes.first!.semitonesFromA4
+    private static let maxSelectableSemitones = selectableNotes.last!.semitonesFromA4
 
     init(viewModel: TunerViewModel) {
         self.viewModel = viewModel
@@ -132,6 +133,20 @@ struct TuningPicker: View {
                             Text(note.fullName).tag(note)
                         }
                     }
+                    .labelsHidden()
+                    .tint(TunerTheme.accent)
+
+                    // El stepper y el desplegable de arriba controlan la misma nota: subir/bajar
+                    // el stepper mueve semitono a semitono, y el desplegable siempre refleja la
+                    // nota resultante.
+                    Stepper(
+                        "Semitono",
+                        value: Binding(
+                            get: { customNotes[index].semitonesFromA4 },
+                            set: { customNotes[index] = Note.note(forSemitonesFromA4: $0) }
+                        ),
+                        in: Self.minSelectableSemitones...Self.maxSelectableSemitones
+                    )
                     .labelsHidden()
                     .tint(TunerTheme.accent)
                 }
