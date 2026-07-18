@@ -6,7 +6,7 @@
 import Foundation
 
 /// Instrumentos soportados por el afinador.
-enum Instrument: String, CaseIterable, Identifiable {
+enum Instrument: String, CaseIterable, Identifiable, Codable {
     case guitar
     case bass
     case ukulele

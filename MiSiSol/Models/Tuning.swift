@@ -9,7 +9,7 @@ import Foundation
 
 /// Afinación de un instrumento: lista ordenada de notas (una por cuerda), de la más grave a la más aguda.
 /// Una afinación custom es simplemente una lista de notas, no depende de ninguna afinación estándar.
-struct Tuning: Equatable {
+struct Tuning: Equatable, Codable {
     var name: String
     var instrument: Instrument
     var strings: [Note]

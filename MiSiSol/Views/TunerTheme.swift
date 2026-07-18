@@ -42,6 +42,24 @@ extension TuningStatus {
     }
 }
 
+/// Estilo visual del indicador de afinación, elegible en el sheet de ajustes y persistido entre
+/// sesiones con `@AppStorage`.
+enum GaugeStyle: String, CaseIterable, Identifiable {
+    /// Arco semicircular con aguja, como un potenciómetro.
+    case dial
+    /// Línea horizontal centrada en la nota objetivo, con una bolita que se mueve a los lados.
+    case bar
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .dial: return "Dial"
+        case .bar: return "Barra"
+        }
+    }
+}
+
 /// Cápsula de selección reutilizada por el selector de instrumento, cuerda y modo.
 struct TunerChip: View {
     let label: String

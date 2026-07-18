@@ -8,7 +8,7 @@
 import Foundation
 
 /// Nota musical (ej. E2, A2, D3...) con su frecuencia en temperamento igual.
-struct Note: Equatable, Hashable {
+struct Note: Equatable, Hashable, Codable {
 
     /// Frecuencia de referencia de A4 (La 4) en Hz.
     static let referenceFrequency: Double = 440.0

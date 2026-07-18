@@ -50,6 +50,7 @@ nonisolated final class TunerViewModel {
     private let pitchDetector: PitchDetector
     private let audioEngine: AudioEngine
     private let toneGenerator: ToneGenerator
+    private let tuningStore: TuningStore
     /// Cola serial donde se ejecuta `PitchDetector.detectPitch`, fuera del hilo real-time de audio.
     /// Es serial (no la cola global concurrente) para que los buffers se procesen en el mismo
     /// orden en que llegan y no se solape el análisis de dos buffers a la vez.
@@ -101,12 +102,14 @@ nonisolated final class TunerViewModel {
         pitchDetector: PitchDetector = PitchDetector(),
         audioEngine: AudioEngine = AudioEngine(),
         toneGenerator: ToneGenerator = ToneGenerator(),
+        tuningStore: TuningStore = TuningStore(),
         inTuneCentsMargin: Double = 5.0,
         smoothingWindowSize: Int = 5,
         maxConsecutiveMissedReadings: Int = 3
     ) {
         self.instrument = instrument
-        self.tuning = .standard(for: instrument)
+        self.tuningStore = tuningStore
+        self.tuning = tuningStore.loadTuning(for: instrument) ?? .standard(for: instrument)
         self.pitchDetector = pitchDetector
         self.audioEngine = audioEngine
         self.toneGenerator = toneGenerator
@@ -125,15 +128,18 @@ nonisolated final class TunerViewModel {
 
     func selectInstrument(_ newInstrument: Instrument) {
         instrument = newInstrument
-        tuning = .standard(for: newInstrument)
+        tuning = tuningStore.loadTuning(for: newInstrument) ?? .standard(for: newInstrument)
         selectedStringIndex = 0
     }
 
+    /// Cambia la afinación activa y la recuerda para este instrumento entre sesiones (igual que
+    /// al elegir un preset, transportar, o aplicar una afinación personalizada: todas pasan por aquí).
     func selectTuning(_ newTuning: Tuning) {
         tuning = newTuning
         if !tuning.strings.indices.contains(selectedStringIndex) {
             selectedStringIndex = max(0, tuning.strings.count - 1)
         }
+        tuningStore.saveTuning(newTuning, for: instrument)
     }
 
     func transpose(bySemitones offset: Int) {

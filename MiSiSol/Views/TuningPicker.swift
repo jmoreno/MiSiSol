@@ -11,6 +11,7 @@ import SwiftUI
 struct TuningPicker: View {
     let viewModel: TunerViewModel
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("gaugeStyle") private var gaugeStyle: GaugeStyle = .dial
 
     @State private var customNotes: [Note]
 
@@ -33,6 +34,7 @@ struct TuningPicker: View {
                 presetSection
                 transposeSection
                 customSection
+                appearanceSection
             }
             .scrollContentBackground(.hidden)
             .background(TunerTheme.background)
@@ -160,6 +162,26 @@ struct TuningPicker: View {
             .listRowBackground(TunerTheme.surface)
         } header: {
             Text("Personalizada").foregroundStyle(TunerTheme.textSecondary)
+        }
+    }
+
+    // MARK: - Apariencia
+
+    private var appearanceSection: some View {
+        Section {
+            HStack(spacing: 6) {
+                ForEach(GaugeStyle.allCases) { style in
+                    Button {
+                        gaugeStyle = style
+                    } label: {
+                        TunerChip(label: style.displayName, isSelected: gaugeStyle == style)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .listRowBackground(TunerTheme.surface)
+        } header: {
+            Text("Apariencia del indicador").foregroundStyle(TunerTheme.textSecondary)
         }
     }
 
