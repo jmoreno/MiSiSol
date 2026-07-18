@@ -80,6 +80,12 @@ nonisolated final class TunerViewModel {
     private var recentFrequencies: [Float] = []
     private var wasListeningBeforeReferenceNote = false
 
+    /// Lecturas sin detección clara consecutivas hasta ahora. No se resetea el suavizado a la
+    /// primera lectura fallida: una señal real (ruido, un ataque más flojo, un instante de menor
+    /// claridad) puede fallar el umbral puntualmente sin que el usuario haya dejado de tocar.
+    private var consecutiveMissedReadings = 0
+    private let maxConsecutiveMissedReadings: Int
+
     // MARK: - Init
 
     init(
@@ -88,7 +94,8 @@ nonisolated final class TunerViewModel {
         audioEngine: AudioEngine = AudioEngine(),
         toneGenerator: ToneGenerator = ToneGenerator(),
         inTuneCentsMargin: Double = 5.0,
-        smoothingWindowSize: Int = 5
+        smoothingWindowSize: Int = 5,
+        maxConsecutiveMissedReadings: Int = 3
     ) {
         self.instrument = instrument
         self.tuning = .standard(for: instrument)
@@ -97,6 +104,7 @@ nonisolated final class TunerViewModel {
         self.toneGenerator = toneGenerator
         self.inTuneCentsMargin = inTuneCentsMargin
         self.smoothingWindowSize = smoothingWindowSize
+        self.maxConsecutiveMissedReadings = maxConsecutiveMissedReadings
     }
 
     /// Nota objetivo de la cuerda actualmente seleccionada.
@@ -163,6 +171,8 @@ nonisolated final class TunerViewModel {
     /// simuladas, sin depender de AVAudioEngine real.
     func processPitch(_ frequency: Float?) {
         guard let frequency, frequency > 0 else {
+            consecutiveMissedReadings += 1
+            guard consecutiveMissedReadings >= maxConsecutiveMissedReadings else { return }
             recentFrequencies.removeAll()
             detectedFrequency = nil
             detectedNote = nil
@@ -170,6 +180,7 @@ nonisolated final class TunerViewModel {
             status = .noSignal
             return
         }
+        consecutiveMissedReadings = 0
 
         recentFrequencies.append(frequency)
         if recentFrequencies.count > smoothingWindowSize {

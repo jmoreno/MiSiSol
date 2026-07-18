@@ -49,13 +49,25 @@ struct PitchDetector {
         let windowed = hannWindowed(buffer)
         guard windowed.contains(where: { $0 != 0 }) else { return nil } // silencio: nada que correlar
 
-        // Correlación normalizada para cada lag candidato, calculada una sola vez y reutilizada
-        // tanto para localizar el pico como para refinarlo por interpolación parabólica.
-        let correlations = (minLag...maxLag).map { normalizedCrossCorrelation(windowed, lag: $0) }
+        // Las correlaciones se calculan bajo demanda y se cachean, en vez de calcular todo el
+        // rango [minLag, maxLag] de antemano: la mayoría de sonidos reales tienen su periodo
+        // fundamental mucho antes de maxLag, así que precalcular todo el rango desperdicia
+        // trabajo justo en el caso más común (y en una build sin optimizar puede tardar más de
+        // lo que dura un buffer de audio, acumulando retraso).
+        var cache = [Float?](repeating: nil, count: maxLag - minLag + 1)
+        func correlation(atLag lag: Int) -> Float {
+            let index = lag - minLag
+            if let cached = cache[index] { return cached }
+            let value = normalizedCrossCorrelation(windowed, lag: lag)
+            cache[index] = value
+            return value
+        }
 
-        guard let peakIndex = dominantPeakIndex(in: correlations) else { return nil }
+        guard let peakLag = dominantPeakLag(minLag: minLag, maxLag: maxLag, correlation: correlation) else {
+            return nil
+        }
 
-        let refinedLag = parabolicRefinement(around: peakIndex, in: correlations, minLag: minLag)
+        let refinedLag = parabolicRefinement(around: peakLag, minLag: minLag, maxLag: maxLag, correlation: correlation)
         guard refinedLag > 0 else { return nil }
 
         return Float(sampleRate) / refinedLag
@@ -63,8 +75,8 @@ struct PitchDetector {
 
     // MARK: - Búsqueda de pico
 
-    /// Localiza, dentro de la serie de correlaciones (una por lag candidato), el primer máximo
-    /// local que representa la periodicidad fundamental.
+    /// Localiza el primer máximo local de la correlación (por lag) que representa la
+    /// periodicidad fundamental.
     ///
     /// Cerca de lag pequeño la correlación es alta simplemente por la continuidad de la señal
     /// (dos muestras muy próximas de cualquier onda suave se parecen, sea o no periódica en ese lag),
@@ -73,22 +85,22 @@ struct PitchDetector {
     /// periódica, ese máximo cae en el periodo fundamental; los múltiplos del periodo (2x, 3x...)
     /// producen máximos igual de altos más adelante, pero al quedarnos con el primero evitamos
     /// los errores de octava.
-    private func dominantPeakIndex(in correlations: [Float]) -> Int? {
-        guard correlations.count > 2 else { return nil }
+    private func dominantPeakLag(minLag: Int, maxLag: Int, correlation: (Int) -> Float) -> Int? {
+        guard maxLag > minLag + 1 else { return nil }
 
-        var i = 0
-        while i < correlations.count - 1 && correlations[i + 1] < correlations[i] {
-            i += 1
+        var lag = minLag
+        while lag < maxLag && correlation(lag + 1) < correlation(lag) {
+            lag += 1
         }
-        guard i < correlations.count - 1 else { return nil } // nunca remonta: no hay periodicidad clara
+        guard lag < maxLag else { return nil } // nunca remonta: no hay periodicidad clara
 
-        var peakIndex = i
-        while peakIndex < correlations.count - 1 && correlations[peakIndex + 1] >= correlations[peakIndex] {
-            peakIndex += 1
+        var peakLag = lag
+        while peakLag < maxLag && correlation(peakLag + 1) >= correlation(peakLag) {
+            peakLag += 1
         }
 
-        guard correlations[peakIndex] >= clarityThreshold else { return nil }
-        return peakIndex
+        guard correlation(peakLag) >= clarityThreshold else { return nil }
+        return peakLag
     }
 
     // MARK: - Ventana de Hann
@@ -137,15 +149,14 @@ struct PitchDetector {
 
     /// Refina la posición del pico con interpolación parabólica sobre los tres puntos vecinos,
     /// para obtener una estimación de frecuencia sub-muestra más precisa que el lag entero.
-    private func parabolicRefinement(around index: Int, in correlations: [Float], minLag: Int) -> Float {
-        let lag = Float(minLag + index)
-        guard index - 1 >= 0, index + 1 < correlations.count else { return lag }
-        let yBefore = correlations[index - 1]
-        let yAt = correlations[index]
-        let yAfter = correlations[index + 1]
+    private func parabolicRefinement(around lag: Int, minLag: Int, maxLag: Int, correlation: (Int) -> Float) -> Float {
+        guard lag - 1 >= minLag, lag + 1 <= maxLag else { return Float(lag) }
+        let yBefore = correlation(lag - 1)
+        let yAt = correlation(lag)
+        let yAfter = correlation(lag + 1)
         let denominator = yBefore - 2 * yAt + yAfter
-        guard denominator != 0 else { return lag }
+        guard denominator != 0 else { return Float(lag) }
         let delta = 0.5 * (yBefore - yAfter) / denominator
-        return lag + delta
+        return Float(lag) + delta
     }
 }

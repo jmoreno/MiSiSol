@@ -45,15 +45,33 @@ final class TunerViewModelTests: XCTestCase {
         XCTAssertEqual(vm.status, .tooHigh)
     }
 
-    func testNilFrequencyResetsToNoSignal() {
-        let vm = TunerViewModel(instrument: .guitar)
+    func testNilFrequencyResetsToNoSignalAfterConsecutiveMisses() {
+        let vm = TunerViewModel(instrument: .guitar, maxConsecutiveMissedReadings: 3)
         vm.processPitch(110)
         XCTAssertNotEqual(vm.status, .noSignal)
 
         vm.processPitch(nil)
+        vm.processPitch(nil)
+        vm.processPitch(nil)
         XCTAssertEqual(vm.status, .noSignal)
         XCTAssertNil(vm.detectedFrequency)
         XCTAssertNil(vm.detectedNote)
+    }
+
+    func testIsolatedMissedReadingDoesNotResetSmoothedFrequency() {
+        let vm = TunerViewModel(instrument: .guitar, smoothingWindowSize: 4, maxConsecutiveMissedReadings: 3)
+        for _ in 0..<4 { vm.processPitch(110) }
+        XCTAssertEqual(vm.detectedFrequency ?? 0, 110, accuracy: 0.01)
+
+        // Una lectura fallida aislada (por debajo del máximo de fallos consecutivos) no debe
+        // borrar el historial de suavizado ni el estado detectado.
+        vm.processPitch(nil)
+        XCTAssertEqual(vm.detectedFrequency ?? 0, 110, accuracy: 0.01)
+        XCTAssertNotEqual(vm.status, .noSignal)
+
+        // Una lectura buena vuelve a poner el contador de fallos a cero.
+        vm.processPitch(110)
+        XCTAssertEqual(vm.detectedFrequency ?? 0, 110, accuracy: 0.01)
     }
 
     func testSelectingInstrumentResetsTuningAndUpdatesTargetNote() {

@@ -74,7 +74,7 @@ nonisolated final class ToneGenerator {
         // el usuario pulsa "Reproducir" mientras se resuelve el permiso de micrófono al abrir
         // la app). Es idempotente: si ya estaba configurada, esta llamada no hace nada distinto.
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playAndRecord, options: [.defaultToSpeaker, .allowBluetooth])
+        try? session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetooth])
         try? session.setActive(true)
 
         // El formato se pide al propio mainMixerNode en vez de fijarlo a 44.1kHz: el sample rate

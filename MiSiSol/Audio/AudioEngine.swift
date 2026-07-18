@@ -49,7 +49,11 @@ nonisolated final class AudioEngine {
         stop()
 
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, options: [.defaultToSpeaker, .allowBluetooth])
+        // .measurement desactiva el procesado de voz (control automático de ganancia,
+        // cancelación de eco...) que aplica el modo .default en .playAndRecord: pensado para
+        // llamadas, no para un afinador, donde queremos la señal lo más fiel posible al sonido
+        // real del instrumento.
+        try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetooth])
         try session.setActive(true)
 
         let inputNode = engine.inputNode
