@@ -5,22 +5,27 @@
 
 import SwiftUI
 
-/// Selector de instrumento (guitarra / bajo / ukelele).
+/// Selector de instrumento (guitarra / bajo / ukelele) como fila de chips de color.
 struct InstrumentPicker: View {
     let selected: Instrument
     let onSelect: (Instrument) -> Void
 
     var body: some View {
-        Picker("Instrumento", selection: Binding(get: { selected }, set: onSelect)) {
+        HStack(spacing: 6) {
             ForEach(Instrument.allCases) { instrument in
-                Text(instrument.displayName).tag(instrument)
+                Button {
+                    onSelect(instrument)
+                } label: {
+                    TunerChip(label: instrument.displayName, isSelected: instrument == selected)
+                }
+                .buttonStyle(.plain)
             }
         }
-        .pickerStyle(.segmented)
     }
 }
 
 #Preview {
     InstrumentPicker(selected: .guitar) { _ in }
         .padding()
+        .background(TunerTheme.background)
 }

@@ -14,82 +14,106 @@ struct TunerView: View {
     @State private var showingMicrophoneAlert = false
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 28) {
+        ZStack {
+            TunerTheme.background.ignoresSafeArea()
+
+            VStack(spacing: 20) {
+                header
+
                 InstrumentPicker(selected: viewModel.instrument) { newInstrument in
                     viewModel.selectInstrument(newInstrument)
                 }
 
-                modePicker
-
-                stringSelector
-
                 Spacer(minLength: 0)
-
-                detectedNoteDisplay
 
                 CentsGaugeView(
                     cents: viewModel.centsOffset,
                     status: viewModel.status,
                     margin: viewModel.inTuneCentsMargin
                 )
-                .frame(height: 28)
-                .padding(.horizontal)
+                .frame(height: 150)
+                .padding(.horizontal, 12)
 
-                Text(viewModel.status.label)
-                    .font(.headline)
-                    .foregroundStyle(viewModel.status.color)
+                detectedNoteDisplay
 
                 Spacer(minLength: 0)
 
+                stringSelector
+
+                modePicker
+
                 referenceNoteButton
             }
-            .padding()
-            .navigationTitle("MiSiSol")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showingTuningPicker = true
-                    } label: {
-                        Label("Afinación", systemImage: "tuningfork")
-                    }
-                }
-            }
-            .sheet(isPresented: $showingTuningPicker) {
-                TuningPicker(viewModel: viewModel)
-            }
-            .task {
-                await requestMicrophoneAccessIfNeeded()
-            }
-            .onDisappear {
-                viewModel.stopListening()
-            }
-            .alert("Micrófono desactivado", isPresented: $showingMicrophoneAlert) {
-                Button("Vale", role: .cancel) {}
-            } message: {
-                Text("MiSiSol necesita acceso al micrófono para detectar el tono de tu instrumento. Actívalo en Ajustes.")
+            .padding(20)
+        }
+        .sheet(isPresented: $showingTuningPicker) {
+            TuningPicker(viewModel: viewModel)
+        }
+        .task {
+            await requestMicrophoneAccessIfNeeded()
+        }
+        .onDisappear {
+            viewModel.stopListening()
+        }
+        .alert("Micrófono desactivado", isPresented: $showingMicrophoneAlert) {
+            Button("Vale", role: .cancel) {}
+        } message: {
+            Text("MiSiSol necesita acceso al micrófono para detectar el tono de tu instrumento. Actívalo en Ajustes.")
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private var header: some View {
+        HStack {
+            Text("MiSiSol")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(TunerTheme.textPrimary)
+            Spacer()
+            Button {
+                showingTuningPicker = true
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(TunerTheme.textSecondary)
+                    .frame(width: 32, height: 32)
+                    .background(TunerTheme.surface)
+                    .clipShape(Circle())
             }
         }
     }
 
     private var modePicker: some View {
-        Picker("Modo", selection: Binding(get: { viewModel.mode }, set: { viewModel.setMode($0) })) {
+        HStack(spacing: 4) {
             ForEach(TunerMode.allCases) { mode in
-                Text(mode.displayName).tag(mode)
+                Button {
+                    viewModel.setMode(mode)
+                } label: {
+                    Text(mode.displayName)
+                        .font(.system(size: 13, weight: viewModel.mode == mode ? .semibold : .regular))
+                        .foregroundStyle(viewModel.mode == mode ? TunerTheme.textPrimary : TunerTheme.textSecondary)
+                        .padding(.vertical, 7)
+                        .frame(maxWidth: .infinity)
+                        .background(viewModel.mode == mode ? TunerTheme.background : Color.clear)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
             }
         }
-        .pickerStyle(.segmented)
+        .padding(4)
+        .background(TunerTheme.surface)
+        .clipShape(Capsule())
     }
 
     private var stringSelector: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 8) {
+        VStack(spacing: 6) {
+            HStack(spacing: 5) {
                 ForEach(Array(viewModel.tuning.strings.enumerated()), id: \.offset) { index, note in
-                    Button(note.fullName) {
+                    Button {
                         viewModel.selectString(at: index)
+                    } label: {
+                        TunerChip(label: note.fullName, isSelected: index == viewModel.selectedStringIndex)
                     }
-                    .buttonStyle(.bordered)
-                    .tint(index == viewModel.selectedStringIndex ? .accentColor : .secondary)
+                    .buttonStyle(.plain)
                 }
             }
             .disabled(viewModel.mode == .automatic)
@@ -97,27 +121,34 @@ struct TunerView: View {
 
             if viewModel.mode == .automatic {
                 Text("Detectando la cuerda automáticamente")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(TunerTheme.textSecondary)
             }
         }
     }
 
     private var detectedNoteDisplay: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 6) {
             Text(viewModel.detectedNote?.fullName ?? "–")
-                .font(.system(size: 64, weight: .bold, design: .rounded))
+                .font(.system(size: 56, weight: .semibold, design: .rounded))
+                .foregroundStyle(TunerTheme.textPrimary)
                 .contentTransition(.numericText())
             if let frequency = viewModel.detectedFrequency {
-                Text(String(format: "%.1f Hz", frequency))
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
+                Text(frequencyAndCentsText(frequency: frequency))
+                    .font(.system(size: 13))
+                    .foregroundStyle(viewModel.status.color)
             } else {
                 Text("Toca la cuerda \(viewModel.targetNote?.fullName ?? "")")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(TunerTheme.textSecondary)
             }
         }
+    }
+
+    private func frequencyAndCentsText(frequency: Float) -> String {
+        let cents = Int(viewModel.centsOffset.rounded())
+        let centsText = cents >= 0 ? "+\(cents)" : "\(cents)"
+        return String(format: "%.1f Hz · %@ cents", frequency, centsText)
     }
 
     private var referenceNoteButton: some View {
@@ -128,14 +159,18 @@ struct TunerView: View {
                 viewModel.playReferenceNote()
             }
         } label: {
-            Label(
-                viewModel.isPlayingReferenceNote ? "Detener" : "Reproducir \(viewModel.targetNote?.fullName ?? "")",
-                systemImage: viewModel.isPlayingReferenceNote ? "speaker.slash.fill" : "speaker.wave.2.fill"
-            )
+            HStack(spacing: 8) {
+                Image(systemName: viewModel.isPlayingReferenceNote ? "speaker.slash.fill" : "play.fill")
+                Text(viewModel.isPlayingReferenceNote ? "Detener" : "Reproducir \(viewModel.targetNote?.fullName ?? "")")
+            }
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(TunerTheme.accentText)
             .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(TunerTheme.accent)
+            .clipShape(Capsule())
         }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
+        .buttonStyle(.plain)
     }
 
     private func requestMicrophoneAccessIfNeeded() async {
@@ -157,32 +192,11 @@ struct TunerView: View {
     }
 }
 
-// MARK: - Presentación del estado de afinación
+// MARK: - Indicador de cents (dial circular)
 
-private extension TuningStatus {
-    var color: Color {
-        switch self {
-        case .inTune: return .green
-        case .tooLow: return .orange
-        case .tooHigh: return .red
-        case .noSignal: return .secondary
-        }
-    }
-
-    var label: String {
-        switch self {
-        case .inTune: return "Afinado"
-        case .tooLow: return "Sube"
-        case .tooHigh: return "Baja"
-        case .noSignal: return "Sin señal"
-        }
-    }
-}
-
-// MARK: - Indicador de cents
-
-/// Barra horizontal de cents: el centro representa la nota objetivo exacta, el área verde
-/// el margen de "afinado" configurado, y el punto la desviación actual (recortada a ±50 cents).
+/// Dial en forma de arco semicircular: el centro (arriba) representa la nota objetivo exacta,
+/// la zona verde el margen de "afinado" configurado, y la aguja la desviación actual
+/// (recortada a ±50 cents).
 private struct CentsGaugeView: View {
     let cents: Double
     let status: TuningStatus
@@ -193,30 +207,67 @@ private struct CentsGaugeView: View {
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
-            let clampedCents = min(max(cents, -displayRange), displayRange)
-            let fraction = (clampedCents + displayRange) / (2 * displayRange)
-            let marginWidth = width * (margin / displayRange)
+            let height = geometry.size.height
+            let center = CGPoint(x: width / 2, y: height * 0.92)
+            let radius = min(width / 2 - 12, height * 0.85)
 
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color.secondary.opacity(0.2))
+            ZStack {
+                arcPath(center: center, radius: radius, fromDegrees: 180, toDegrees: 0)
+                    .stroke(TunerTheme.surface, style: StrokeStyle(lineWidth: 12, lineCap: .round))
 
-                Capsule()
-                    .fill(Color.green.opacity(0.3))
-                    .frame(width: marginWidth)
-                    .offset(x: width / 2 - marginWidth / 2)
+                arcPath(
+                    center: center,
+                    radius: radius,
+                    fromDegrees: 90 + (margin / displayRange) * 90,
+                    toDegrees: 90 - (margin / displayRange) * 90
+                )
+                .stroke(TunerTheme.success, style: StrokeStyle(lineWidth: 12, lineCap: .round))
 
-                Rectangle()
-                    .fill(Color.primary.opacity(0.5))
-                    .frame(width: 2)
-                    .offset(x: width / 2)
+                needlePath(center: center, radius: radius - 18)
+                    .stroke(status.color, style: StrokeStyle(lineWidth: 4, lineCap: .round))
 
                 Circle()
                     .fill(status.color)
-                    .frame(width: 18, height: 18)
-                    .offset(x: width * fraction - 9)
+                    .frame(width: 14, height: 14)
+                    .position(center)
             }
         }
+    }
+
+    private func needleAngleDegrees() -> Double {
+        let clamped = min(max(cents, -displayRange), displayRange)
+        let fraction = (clamped + displayRange) / (2 * displayRange)
+        return 180 - fraction * 180
+    }
+
+    private func point(center: CGPoint, radius: CGFloat, degrees: Double) -> CGPoint {
+        let rad = degrees * .pi / 180
+        return CGPoint(
+            x: center.x + radius * CGFloat(cos(rad)),
+            y: center.y - radius * CGFloat(sin(rad))
+        )
+    }
+
+    private func arcPath(center: CGPoint, radius: CGFloat, fromDegrees: Double, toDegrees: Double, steps: Int = 48) -> Path {
+        var path = Path()
+        for i in 0...steps {
+            let t = Double(i) / Double(steps)
+            let deg = fromDegrees + (toDegrees - fromDegrees) * t
+            let p = point(center: center, radius: radius, degrees: deg)
+            if i == 0 {
+                path.move(to: p)
+            } else {
+                path.addLine(to: p)
+            }
+        }
+        return path
+    }
+
+    private func needlePath(center: CGPoint, radius: CGFloat) -> Path {
+        var path = Path()
+        path.move(to: center)
+        path.addLine(to: point(center: center, radius: radius, degrees: needleAngleDegrees()))
+        return path
     }
 }
 

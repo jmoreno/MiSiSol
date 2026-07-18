@@ -28,23 +28,29 @@ struct TuningPicker: View {
                 transposeSection
                 customSection
             }
+            .scrollContentBackground(.hidden)
+            .background(TunerTheme.background)
             .navigationTitle("Afinación")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cerrar") { dismiss() }
+                        .tint(TunerTheme.accent)
                 }
             }
         }
+        .preferredColorScheme(.dark)
     }
 
     // MARK: - Estándar y alternativas
 
     private var presetSection: some View {
-        Section("Predefinidas") {
+        Section {
             presetRow(Tuning.standard(for: viewModel.instrument))
             ForEach(Tuning.alternates(for: viewModel.instrument), id: \.name) { alternate in
                 presetRow(alternate)
             }
+        } header: {
+            Text("Predefinidas").foregroundStyle(TunerTheme.textSecondary)
         }
     }
 
@@ -56,24 +62,25 @@ struct TuningPicker: View {
             HStack {
                 VStack(alignment: .leading) {
                     Text(preset.name)
+                        .foregroundStyle(TunerTheme.textPrimary)
                     Text(preset.strings.map(\.fullName).joined(separator: " · "))
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(TunerTheme.textSecondary)
                 }
                 Spacer()
                 if viewModel.tuning.name == preset.name && viewModel.tuning.strings == preset.strings {
                     Image(systemName: "checkmark")
-                        .foregroundStyle(.tint)
+                        .foregroundStyle(TunerTheme.accent)
                 }
             }
         }
-        .tint(.primary)
+        .listRowBackground(TunerTheme.surface)
     }
 
     // MARK: - Transposición rápida
 
     private var transposeSection: some View {
-        Section("Transportar afinación estándar") {
+        Section {
             HStack {
                 Button("−1 tono") { viewModel.transpose(bySemitones: -2) }
                 Spacer()
@@ -86,7 +93,9 @@ struct TuningPicker: View {
                 Button("+1 tono") { viewModel.transpose(bySemitones: 2) }
             }
             .buttonStyle(.borderless)
+            .tint(TunerTheme.accent)
             .font(.footnote)
+            .listRowBackground(TunerTheme.surface)
 
             Stepper(
                 "Semitonos: \(viewModel.tuning.transposeSemitones)",
@@ -96,16 +105,22 @@ struct TuningPicker: View {
                 ),
                 in: -12...12
             )
+            .foregroundStyle(TunerTheme.textPrimary)
+            .tint(TunerTheme.accent)
+            .listRowBackground(TunerTheme.surface)
+        } header: {
+            Text("Transportar afinación estándar").foregroundStyle(TunerTheme.textSecondary)
         }
     }
 
     // MARK: - Personalizada
 
     private var customSection: some View {
-        Section("Personalizada") {
+        Section {
             ForEach(customNoteNames.indices, id: \.self) { index in
                 HStack {
                     Text("Cuerda \(index + 1)")
+                        .foregroundStyle(TunerTheme.textPrimary)
                     Spacer()
                     Picker("Nota", selection: $customNoteNames[index]) {
                         ForEach(Note.noteNames, id: \.self) { name in
@@ -113,18 +128,26 @@ struct TuningPicker: View {
                         }
                     }
                     .labelsHidden()
+                    .tint(TunerTheme.accent)
 
                     Stepper(value: $customOctaves[index], in: 0...7) {
                         Text("\(customOctaves[index])")
+                            .foregroundStyle(TunerTheme.textPrimary)
                     }
                     .labelsHidden()
+                    .tint(TunerTheme.accent)
                     .frame(width: 100)
                 }
+                .listRowBackground(TunerTheme.surface)
             }
 
             Button("Aplicar afinación personalizada") {
                 applyCustomTuning()
             }
+            .tint(TunerTheme.accent)
+            .listRowBackground(TunerTheme.surface)
+        } header: {
+            Text("Personalizada").foregroundStyle(TunerTheme.textSecondary)
         }
     }
 
