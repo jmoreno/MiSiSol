@@ -67,13 +67,11 @@ nonisolated final class ToneGenerator {
         currentFrequency = nil
     }
 
-    /// Configura la sesión de audio para reproducción, en cada `play()` (no solo la primera vez):
-    /// AudioEngine usa el modo `.measurement` mientras escucha por el micrófono (desactiva el
-    /// procesado de voz para no distorsionar la señal del instrumento), pero ese mismo modo
-    /// también desactiva el ajuste automático de ganancia de **salida**, así que el tono de
-    /// referencia suena más bajo con él. Si solo configuráramos esto una vez (la primera vez que
-    /// arranca el motor), tras escuchar por el micrófono la sesión se quedaría en modo
-    /// `.measurement` y la siguiente reproducción heredaría ese modo sin querer.
+    /// Configura la sesión de audio para reproducción en cada `play()` (no solo la primera vez),
+    /// para que reproducir una nota funcione aunque la captura de micrófono no se haya llegado a
+    /// arrancar todavía (p.ej. el usuario pulsa "Reproducir" mientras se resuelve el permiso de
+    /// micrófono al abrir la app). AudioEngine usa el mismo modo `.default` al escuchar, así que
+    /// esto ya no compite con la sesión que deja la captura al terminar.
     private func configureSessionForPlayback() {
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
