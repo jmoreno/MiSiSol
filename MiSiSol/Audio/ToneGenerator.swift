@@ -45,14 +45,28 @@ nonisolated final class ToneGenerator {
     func play(frequency: Float, amplitude: Float = 0.5) {
         stop()
 
-        let phaseIncrement = 2.0 * Double.pi * Double(frequency) / sampleRate
+        // Se configura la sesión aquí (no solo en AudioEngine) para que reproducir una nota
+        // funcione aunque la captura de micrófono no se haya llegado a arrancar todavía (p.ej.
+        // el usuario pulsa "Reproducir" mientras se resuelve el permiso de micrófono al abrir
+        // la app). Es idempotente: si ya estaba configurada, esta llamada no hace nada distinto.
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playAndRecord, options: [.defaultToSpeaker, .allowBluetooth])
+        try? session.setActive(true)
+
+        // El formato se pide al propio mainMixerNode en vez de fijarlo a 44.1kHz: el sample rate
+        // real del hardware varía según el dispositivo y la ruta de audio activa (auriculares,
+        // Bluetooth...). Usar un formato que no coincide con el del engine es una causa habitual
+        // de fallos de arranque intermitentes en dispositivo real (el simulador siempre usa
+        // 44.1kHz, por eso ahí no se notaba).
+        let format = engine.mainMixerNode.outputFormat(forBus: 0)
+        let effectiveSampleRate = format.sampleRate > 0 ? format.sampleRate : sampleRate
+        let phaseIncrement = 2.0 * Double.pi * Double(frequency) / effectiveSampleRate
         // El estado de fase se aísla en una clase aparte (en vez de una propiedad de ToneGenerator)
         // para que el closure de render de audio, que se ejecuta en el hilo real-time de audio,
         // no capture `self` ni dependa de su aislamiento de actor.
         let state = TonePhaseState()
 
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else { return }
-        let node = AVAudioSourceNode { _, _, frameCount, audioBufferList in
+        let node = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList in
             let bufferList = UnsafeMutableAudioBufferListPointer(audioBufferList)
             var phase = state.phase
             for frame in 0..<Int(frameCount) {
@@ -72,6 +86,7 @@ nonisolated final class ToneGenerator {
         sourceNode = node
 
         do {
+            engine.prepare()
             try engine.start()
             isPlaying = true
             currentFrequency = frequency

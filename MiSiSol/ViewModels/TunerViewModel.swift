@@ -50,6 +50,10 @@ nonisolated final class TunerViewModel {
     private let pitchDetector: PitchDetector
     private let audioEngine: AudioEngine
     private let toneGenerator: ToneGenerator
+    /// Cola serial donde se ejecuta `PitchDetector.detectPitch`, fuera del hilo real-time de audio.
+    /// Es serial (no la cola global concurrente) para que los buffers se procesen en el mismo
+    /// orden en que llegan y no se solape el análisis de dos buffers a la vez.
+    private let pitchQueue = DispatchQueue(label: "com.zinkinapps.misisol.pitch", qos: .userInitiated)
 
     /// Margen de cents dentro del cual se considera "afinado".
     let inTuneCentsMargin: Double
@@ -132,10 +136,17 @@ nonisolated final class TunerViewModel {
     // MARK: - Captura de audio
 
     func startListening() {
-        try? audioEngine.start { [pitchDetector] samples, sampleRate in
-            let pitch = pitchDetector.detectPitch(in: samples, sampleRate: sampleRate)
-            Task { @MainActor [weak self] in
-                self?.processPitch(pitch)
+        // El closure de `onBuffer` se invoca en el hilo real-time de captura de audio: debe
+        // volver lo antes posible. `PitchDetector` hace autocorrelación sobre miles de muestras,
+        // demasiado costoso para ese hilo (si tarda más que la duración de un buffer, se acumula
+        // retraso o se pierden buffers). Por eso el cálculo se manda a una cola en background, y
+        // solo el salto final a @MainActor toca el hilo principal para actualizar la UI.
+        try? audioEngine.start { [pitchDetector, pitchQueue, weak self] samples, sampleRate in
+            pitchQueue.async {
+                let pitch = pitchDetector.detectPitch(in: samples, sampleRate: sampleRate)
+                Task { @MainActor in
+                    self?.processPitch(pitch)
+                }
             }
         }
     }
