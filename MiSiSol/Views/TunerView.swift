@@ -72,7 +72,7 @@ struct TunerView: View {
             Button {
                 showingTuningPicker = true
             } label: {
-                Image(systemName: "slider.horizontal.3")
+                Image(systemName: "tuningfork")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(TunerTheme.textSecondary)
                     .frame(width: 32, height: 32)

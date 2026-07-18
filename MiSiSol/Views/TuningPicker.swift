@@ -12,13 +12,18 @@ struct TuningPicker: View {
     let viewModel: TunerViewModel
     @Environment(\.dismiss) private var dismiss
 
-    @State private var customNoteNames: [String]
-    @State private var customOctaves: [Int]
+    @State private var customNotes: [Note]
+
+    /// Todas las notas seleccionables en el desplegable de afinación personalizada, ordenadas
+    /// de más grave a más aguda (octavas 0 a 7). Una sola lista con nota+octava combinadas,
+    /// en vez de dos controles separados (nombre de nota y octava).
+    private static let selectableNotes: [Note] = (0...7).flatMap { octave in
+        Note.noteNames.compactMap { name in Note.make(name: name, octave: octave) }
+    }
 
     init(viewModel: TunerViewModel) {
         self.viewModel = viewModel
-        _customNoteNames = State(initialValue: viewModel.tuning.strings.map(\.name))
-        _customOctaves = State(initialValue: viewModel.tuning.strings.map(\.octave))
+        _customNotes = State(initialValue: viewModel.tuning.strings)
     }
 
     var body: some View {
@@ -117,26 +122,18 @@ struct TuningPicker: View {
 
     private var customSection: some View {
         Section {
-            ForEach(customNoteNames.indices, id: \.self) { index in
+            ForEach(customNotes.indices, id: \.self) { index in
                 HStack {
                     Text("Cuerda \(index + 1)")
                         .foregroundStyle(TunerTheme.textPrimary)
                     Spacer()
-                    Picker("Nota", selection: $customNoteNames[index]) {
-                        ForEach(Note.noteNames, id: \.self) { name in
-                            Text(name).tag(name)
+                    Picker("Nota", selection: $customNotes[index]) {
+                        ForEach(Self.selectableNotes, id: \.self) { note in
+                            Text(note.fullName).tag(note)
                         }
                     }
                     .labelsHidden()
                     .tint(TunerTheme.accent)
-
-                    Stepper(value: $customOctaves[index], in: 0...7) {
-                        Text("\(customOctaves[index])")
-                            .foregroundStyle(TunerTheme.textPrimary)
-                    }
-                    .labelsHidden()
-                    .tint(TunerTheme.accent)
-                    .frame(width: 100)
                 }
                 .listRowBackground(TunerTheme.surface)
             }
@@ -152,14 +149,11 @@ struct TuningPicker: View {
     }
 
     private func applyCustomTuning() {
-        let notes = zip(customNoteNames, customOctaves).compactMap { Note.make(name: $0, octave: $1) }
-        guard notes.count == customNoteNames.count else { return }
-        viewModel.selectTuning(.custom(instrument: viewModel.instrument, notes: notes))
+        viewModel.selectTuning(.custom(instrument: viewModel.instrument, notes: customNotes))
     }
 
     private func resetCustomEditorState() {
-        customNoteNames = viewModel.tuning.strings.map(\.name)
-        customOctaves = viewModel.tuning.strings.map(\.octave)
+        customNotes = viewModel.tuning.strings
     }
 }
 
