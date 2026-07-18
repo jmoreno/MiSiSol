@@ -20,6 +20,8 @@ struct TunerView: View {
                     viewModel.selectInstrument(newInstrument)
                 }
 
+                modePicker
+
                 stringSelector
 
                 Spacer(minLength: 0)
@@ -70,14 +72,33 @@ struct TunerView: View {
         }
     }
 
+    private var modePicker: some View {
+        Picker("Modo", selection: Binding(get: { viewModel.mode }, set: { viewModel.setMode($0) })) {
+            ForEach(TunerMode.allCases) { mode in
+                Text(mode.displayName).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+    }
+
     private var stringSelector: some View {
-        HStack(spacing: 8) {
-            ForEach(Array(viewModel.tuning.strings.enumerated()), id: \.offset) { index, note in
-                Button(note.fullName) {
-                    viewModel.selectString(at: index)
+        VStack(spacing: 4) {
+            HStack(spacing: 8) {
+                ForEach(Array(viewModel.tuning.strings.enumerated()), id: \.offset) { index, note in
+                    Button(note.fullName) {
+                        viewModel.selectString(at: index)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(index == viewModel.selectedStringIndex ? .accentColor : .secondary)
                 }
-                .buttonStyle(.bordered)
-                .tint(index == viewModel.selectedStringIndex ? .accentColor : .secondary)
+            }
+            .disabled(viewModel.mode == .automatic)
+            .opacity(viewModel.mode == .automatic ? 0.5 : 1)
+
+            if viewModel.mode == .automatic {
+                Text("Detectando la cuerda automáticamente")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }

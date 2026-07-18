@@ -9,6 +9,23 @@
 import Foundation
 import Observation
 
+/// Cómo se elige la cuerda objetivo con la que se compara la frecuencia detectada.
+enum TunerMode: String, CaseIterable, Identifiable {
+    /// El usuario elige la cuerda objetivo a mano (ver `selectString(at:)`).
+    case manual
+    /// La cuerda objetivo se recalcula sola: la más cercana en cents a lo que se está escuchando.
+    case automatic
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .manual: return "Manual"
+        case .automatic: return "Automático"
+        }
+    }
+}
+
 /// Estado de afinación de la cuerda seleccionada respecto a su nota objetivo.
 enum TuningStatus: Equatable {
     /// No hay señal de entrada suficientemente clara.
@@ -44,6 +61,12 @@ nonisolated final class TunerViewModel {
     private(set) var instrument: Instrument
     private(set) var tuning: Tuning
     private(set) var selectedStringIndex: Int = 0
+    private(set) var mode: TunerMode = .manual
+
+    /// En modo automático, solo cambiamos la cuerda objetivo si la nueva candidata está al menos
+    /// esto más cerca (en cents) que la actualmente seleccionada. Evita que el indicador parpadee
+    /// entre dos cuerdas vecinas cuando la nota está justo en el punto medio entre ambas.
+    private let autoSwitchHysteresisCents: Double = 10
 
     var detectedFrequency: Float?
     var detectedNote: Note?
@@ -102,6 +125,10 @@ nonisolated final class TunerViewModel {
         selectedStringIndex = index
     }
 
+    func setMode(_ newMode: TunerMode) {
+        mode = newMode
+    }
+
     // MARK: - Captura de audio
 
     func startListening() {
@@ -141,6 +168,10 @@ nonisolated final class TunerViewModel {
         detectedFrequency = smoothed
         detectedNote = Note.closest(to: Double(smoothed)).note
 
+        if mode == .automatic {
+            selectNearestString(toFrequency: smoothed)
+        }
+
         guard let targetNote else {
             centsOffset = 0
             status = .noSignal
@@ -155,6 +186,24 @@ nonisolated final class TunerViewModel {
             status = .tooLow
         } else {
             status = .tooHigh
+        }
+    }
+
+    /// Busca, entre las cuerdas de la afinación actual (no entre las 12 notas cromáticas), la más
+    /// cercana en cents a `frequency`, y la convierte en la cuerda seleccionada si está claramente
+    /// más cerca que la actual (ver `autoSwitchHysteresisCents`).
+    private func selectNearestString(toFrequency frequency: Float) {
+        guard !tuning.strings.isEmpty else { return }
+
+        let distances = tuning.strings.map { abs(1200 * log2(Double(frequency) / $0.frequency)) }
+        guard let (nearestIndex, nearestDistance) = distances.enumerated().min(by: { $0.element < $1.element }) else {
+            return
+        }
+        guard nearestIndex != selectedStringIndex else { return }
+
+        let currentDistance = distances[selectedStringIndex]
+        if currentDistance - nearestDistance >= autoSwitchHysteresisCents {
+            selectedStringIndex = nearestIndex
         }
     }
 

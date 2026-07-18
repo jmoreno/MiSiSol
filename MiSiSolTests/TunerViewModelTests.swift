@@ -92,4 +92,54 @@ final class TunerViewModelTests: XCTestCase {
         XCTAssertEqual(vm.selectedStringIndex, 3)
         XCTAssertEqual(vm.targetNote?.fullName, "G2")
     }
+
+    // MARK: - Modo automático
+
+    func testDefaultModeIsManual() {
+        let vm = TunerViewModel(instrument: .guitar)
+        XCTAssertEqual(vm.mode, .manual)
+    }
+
+    func testAutomaticModeSelectsNearestStringToDetectedFrequency() {
+        let vm = TunerViewModel(instrument: .guitar, smoothingWindowSize: 1)
+        vm.setMode(.automatic)
+        XCTAssertEqual(vm.selectedStringIndex, 0) // E2 por defecto
+
+        let a2 = Note.make(name: "A", octave: 2)!.frequency // segunda cuerda de la guitarra
+        vm.processPitch(Float(a2))
+        XCTAssertEqual(vm.selectedStringIndex, 1)
+        XCTAssertEqual(vm.targetNote?.fullName, "A2")
+    }
+
+    func testManualModeDoesNotChangeSelectedStringBasedOnDetectedPitch() {
+        let vm = TunerViewModel(instrument: .guitar, smoothingWindowSize: 1)
+        // Modo manual por defecto, cuerda 0 (E2) seleccionada.
+        let a2 = Note.make(name: "A", octave: 2)!.frequency
+        vm.processPitch(Float(a2))
+        XCTAssertEqual(vm.selectedStringIndex, 0)
+        XCTAssertEqual(vm.targetNote?.fullName, "E2")
+    }
+
+    func testAutomaticModeHysteresisAvoidsFlickeringNearMidpointBetweenStrings() {
+        let vm = TunerViewModel(instrument: .guitar, smoothingWindowSize: 1)
+        vm.setMode(.automatic)
+
+        let e2 = Note.make(name: "E", octave: 2)!.frequency
+        let a2 = Note.make(name: "A", octave: 2)!.frequency
+        let totalCents = 1200 * log2(a2 / e2)
+
+        vm.processPitch(Float(e2))
+        XCTAssertEqual(vm.selectedStringIndex, 0)
+
+        // Un poco más cerca de A2 que de E2, pero por debajo del margen de histéresis (10 cents):
+        // no debería cambiar de cuerda objetivo todavía.
+        let nearMidpoint = e2 * pow(2.0, (totalCents / 2 + 3) / 1200.0)
+        vm.processPitch(Float(nearMidpoint))
+        XCTAssertEqual(vm.selectedStringIndex, 0)
+
+        // Claramente más cerca de A2 (por encima del margen de histéresis): ahora sí cambia.
+        let clearlyCloserToA2 = e2 * pow(2.0, (totalCents - 20) / 1200.0)
+        vm.processPitch(Float(clearlyCloserToA2))
+        XCTAssertEqual(vm.selectedStringIndex, 1)
+    }
 }
