@@ -76,6 +76,10 @@ nonisolated final class TunerViewModel {
     var detectedNote: Note?
     var centsOffset: Double = 0
     var status: TuningStatus = .noSignal
+    /// Claridad (0...1) de la última lectura, la haya aceptado el detector o no. Solo para
+    /// depuración en pantalla (ver TunerView): ayuda a saber si una señal real se está quedando
+    /// justo por debajo de `PitchDetector.clarityThreshold` o muy lejos de él.
+    var lastClarity: Float = 0
 
     private var recentFrequencies: [Float] = []
     private var wasListeningBeforeReferenceNote = false
@@ -151,9 +155,10 @@ nonisolated final class TunerViewModel {
         // solo el salto final a @MainActor toca el hilo principal para actualizar la UI.
         try? audioEngine.start { [pitchDetector, pitchQueue, weak self] samples, sampleRate in
             pitchQueue.async {
-                let pitch = pitchDetector.detectPitch(in: samples, sampleRate: sampleRate)
+                let result = pitchDetector.detectPitchWithDiagnostics(in: samples, sampleRate: sampleRate)
                 Task { @MainActor in
-                    self?.processPitch(pitch)
+                    self?.lastClarity = result.clarity
+                    self?.processPitch(result.frequency)
                 }
             }
         }

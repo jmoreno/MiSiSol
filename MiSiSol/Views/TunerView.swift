@@ -36,6 +36,12 @@ struct TunerView: View {
 
                 detectedNoteDisplay
 
+                #if DEBUG
+                Text(String(format: "claridad: %.2f", viewModel.lastClarity))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(TunerTheme.textSecondary)
+                #endif
+
                 Spacer(minLength: 0)
 
                 stringSelector

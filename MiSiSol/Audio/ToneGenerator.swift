@@ -50,7 +50,8 @@ nonisolated final class ToneGenerator {
     /// sin reiniciar el motor de audio (reiniciarlo en cada nota es lo que producía el chasquido
     /// al arrancar: enganchar/desenganchar la ruta de audio del hardware sí hace "pop" aunque la
     /// forma de onda en sí no tenga ningún salto).
-    func play(frequency: Float, amplitude: Float = 0.5) {
+    func play(frequency: Float, amplitude: Float = 0.8) {
+        configureSessionForPlayback()
         ensureEngineIsRunning()
         state.targetFrequency = Double(frequency)
         state.targetAmplitude = Double(amplitude)
@@ -66,16 +67,21 @@ nonisolated final class ToneGenerator {
         currentFrequency = nil
     }
 
+    /// Configura la sesión de audio para reproducción, en cada `play()` (no solo la primera vez):
+    /// AudioEngine usa el modo `.measurement` mientras escucha por el micrófono (desactiva el
+    /// procesado de voz para no distorsionar la señal del instrumento), pero ese mismo modo
+    /// también desactiva el ajuste automático de ganancia de **salida**, así que el tono de
+    /// referencia suena más bajo con él. Si solo configuráramos esto una vez (la primera vez que
+    /// arranca el motor), tras escuchar por el micrófono la sesión se quedaría en modo
+    /// `.measurement` y la siguiente reproducción heredaría ese modo sin querer.
+    private func configureSessionForPlayback() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+        try? session.setActive(true)
+    }
+
     private func ensureEngineIsRunning() {
         guard !isEngineRunning else { return }
-
-        // Se configura la sesión aquí (no solo en AudioEngine) para que reproducir una nota
-        // funcione aunque la captura de micrófono no se haya llegado a arrancar todavía (p.ej.
-        // el usuario pulsa "Reproducir" mientras se resuelve el permiso de micrófono al abrir
-        // la app). Es idempotente: si ya estaba configurada, esta llamada no hace nada distinto.
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetooth])
-        try? session.setActive(true)
 
         // El formato se pide al propio mainMixerNode en vez de fijarlo a 44.1kHz: el sample rate
         // real del hardware varía según el dispositivo y la ruta de audio activa (auriculares,

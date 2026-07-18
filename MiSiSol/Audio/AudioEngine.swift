@@ -52,7 +52,10 @@ nonisolated final class AudioEngine {
         // .measurement desactiva el procesado de voz (control automático de ganancia,
         // cancelación de eco...) que aplica el modo .default en .playAndRecord: pensado para
         // llamadas, no para un afinador, donde queremos la señal lo más fiel posible al sonido
-        // real del instrumento.
+        // real del instrumento. Se reafirma en cada start() (no solo la primera vez) porque
+        // ToneGenerator pone la sesión en modo .default mientras reproduce la nota de referencia
+        // (ver ToneGenerator.configureSessionForPlayback) y hay que recuperar .measurement al
+        // volver a escuchar.
         try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetooth])
         try session.setActive(true)
 
