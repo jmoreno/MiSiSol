@@ -49,11 +49,12 @@ nonisolated final class AudioEngine {
         stop()
 
         let session = AVAudioSession.sharedInstance()
-        // .measurement desactiva el procesado de voz (control automático de ganancia,
-        // cancelación de eco...) que aplica el modo .default en .playAndRecord: pensado para
-        // llamadas, no para un afinador, donde queremos la señal lo más fiel posible al sonido
-        // real del instrumento.
-        try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetooth])
+        // El modo .measurement se probó para evitar el procesado de voz de .default en
+        // .playAndRecord, pero también desactiva el control automático de ganancia de *entrada*:
+        // sin tocar el móvil pegado al instrumento, la señal capturada queda floja y eso bajaba
+        // la claridad de la autocorrelación en general (no solo en cuerdas graves). .default con
+        // AGC da una señal más fuerte a costa de algo de procesado, mejor tradeoff aquí.
+        try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
         try session.setActive(true)
 
         let inputNode = engine.inputNode

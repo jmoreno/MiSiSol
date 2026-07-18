@@ -12,6 +12,7 @@ struct TunerView: View {
     @State private var viewModel = TunerViewModel()
     @State private var showingTuningPicker = false
     @State private var showingMicrophoneAlert = false
+    @AppStorage("gaugeStyle") private var gaugeStyle: GaugeStyle = .dial
 
     var body: some View {
         ZStack {
@@ -26,15 +27,33 @@ struct TunerView: View {
 
                 Spacer(minLength: 0)
 
-                CentsGaugeView(
-                    cents: viewModel.centsOffset,
-                    status: viewModel.status,
-                    margin: viewModel.inTuneCentsMargin
-                )
-                .frame(height: 150)
+                Group {
+                    switch gaugeStyle {
+                    case .dial:
+                        DialGaugeView(
+                            cents: viewModel.centsOffset,
+                            status: viewModel.status,
+                            margin: viewModel.inTuneCentsMargin
+                        )
+                        .frame(height: 150)
+                    case .bar:
+                        BarGaugeView(
+                            cents: viewModel.centsOffset,
+                            status: viewModel.status,
+                            margin: viewModel.inTuneCentsMargin
+                        )
+                        .frame(height: 28)
+                    }
+                }
                 .padding(.horizontal, 12)
 
                 detectedNoteDisplay
+
+                #if DEBUG
+                Text(String(format: "claridad: %.2f", viewModel.lastClarity))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(TunerTheme.textSecondary)
+                #endif
 
                 Spacer(minLength: 0)
 
@@ -192,12 +211,12 @@ struct TunerView: View {
     }
 }
 
-// MARK: - Indicador de cents (dial circular)
+// MARK: - Indicador de cents: dial circular
 
 /// Dial en forma de arco semicircular: el centro (arriba) representa la nota objetivo exacta,
 /// la zona verde el margen de "afinado" configurado, y la aguja la desviación actual
 /// (recortada a ±50 cents).
-private struct CentsGaugeView: View {
+private struct DialGaugeView: View {
     let cents: Double
     let status: TuningStatus
     let margin: Double
@@ -268,6 +287,48 @@ private struct CentsGaugeView: View {
         path.move(to: center)
         path.addLine(to: point(center: center, radius: radius, degrees: needleAngleDegrees()))
         return path
+    }
+}
+
+// MARK: - Indicador de cents: barra horizontal
+
+/// Línea horizontal centrada en la nota objetivo: la marca central representa la nota exacta,
+/// la zona verde el margen de "afinado" configurado, y la bolita la desviación actual
+/// (recortada a ±50 cents), moviéndose a la izquierda o la derecha del centro.
+private struct BarGaugeView: View {
+    let cents: Double
+    let status: TuningStatus
+    let margin: Double
+
+    private let displayRange: Double = 50
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let clampedCents = min(max(cents, -displayRange), displayRange)
+            let fraction = (clampedCents + displayRange) / (2 * displayRange)
+            let marginWidth = width * (margin / displayRange)
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(TunerTheme.surface)
+
+                Capsule()
+                    .fill(TunerTheme.success.opacity(0.35))
+                    .frame(width: marginWidth)
+                    .offset(x: width / 2 - marginWidth / 2)
+
+                Rectangle()
+                    .fill(TunerTheme.textPrimary.opacity(0.6))
+                    .frame(width: 2)
+                    .offset(x: width / 2)
+
+                Circle()
+                    .fill(status.color)
+                    .frame(width: 18, height: 18)
+                    .offset(x: width * fraction - 9)
+            }
+        }
     }
 }
 

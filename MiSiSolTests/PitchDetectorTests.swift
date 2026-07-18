@@ -102,4 +102,19 @@ final class PitchDetectorTests: XCTestCase {
         let tinyBuffer = sineWave(frequency: 440.0, duration: 0.001)
         XCTAssertNil(detector.detectPitch(in: tinyBuffer, sampleRate: sampleRate))
     }
+
+    func testDiagnosticsReportHighClarityForCleanSineWave() {
+        let buffer = sineWave(frequency: 220)
+        let result = detector.detectPitchWithDiagnostics(in: buffer, sampleRate: sampleRate)
+        XCTAssertNotNil(result.frequency)
+        XCTAssertGreaterThan(result.clarity, 0.9)
+    }
+
+    func testDiagnosticsReportClarityEvenWhenBelowThreshold() {
+        let strictDetector = PitchDetector(clarityThreshold: 0.999)
+        let buffer = sineWave(frequency: 220)
+        let result = strictDetector.detectPitchWithDiagnostics(in: buffer, sampleRate: sampleRate)
+        XCTAssertNil(result.frequency)
+        XCTAssertGreaterThan(result.clarity, 0.5) // por debajo del umbral exigido, pero no cero
+    }
 }

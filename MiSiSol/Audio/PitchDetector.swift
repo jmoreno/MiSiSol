@@ -38,16 +38,31 @@ struct PitchDetector {
         Int((2.0 * sampleRate / minFrequency).rounded(.up))
     }
 
+    /// Resultado detallado de un intento de detección: la frecuencia (`nil` si la claridad no
+    /// superó `clarityThreshold`) y la claridad real conseguida (0...1). Pensado para depurar por
+    /// qué una señal real no llega a superar el umbral, sin tener que adivinarlo a ciegas.
+    struct DetectionResult {
+        let frequency: Float?
+        let clarity: Float
+    }
+
     /// Estima la frecuencia fundamental del buffer, o `nil` si no hay señal suficientemente clara
     /// (silencio, ruido, o buffer demasiado corto para el rango de frecuencias configurado).
     func detectPitch(in buffer: [Float], sampleRate: Double) -> Float? {
-        guard maxFrequency > 0, minFrequency > 0 else { return nil }
+        detectPitchWithDiagnostics(in: buffer, sampleRate: sampleRate).frequency
+    }
+
+    /// Igual que `detectPitch`, pero además informa de la claridad real conseguida aunque no
+    /// llegue a superar `clarityThreshold` (en ese caso `frequency` es `nil` pero `clarity` sigue
+    /// siendo el mejor valor encontrado).
+    func detectPitchWithDiagnostics(in buffer: [Float], sampleRate: Double) -> DetectionResult {
+        guard maxFrequency > 0, minFrequency > 0 else { return DetectionResult(frequency: nil, clarity: 0) }
         let minLag = max(1, Int((sampleRate / Double(maxFrequency)).rounded(.down)))
         let maxLag = Int((sampleRate / Double(minFrequency)).rounded(.up))
-        guard buffer.count > maxLag, minLag < maxLag else { return nil }
+        guard buffer.count > maxLag, minLag < maxLag else { return DetectionResult(frequency: nil, clarity: 0) }
 
         let windowed = hannWindowed(buffer)
-        guard windowed.contains(where: { $0 != 0 }) else { return nil } // silencio: nada que correlar
+        guard windowed.contains(where: { $0 != 0 }) else { return DetectionResult(frequency: nil, clarity: 0) } // silencio
 
         // Las correlaciones se calculan bajo demanda y se cachean, en vez de calcular todo el
         // rango [minLag, maxLag] de antemano: la mayoría de sonidos reales tienen su periodo
@@ -63,29 +78,31 @@ struct PitchDetector {
             return value
         }
 
-        guard let peakLag = dominantPeakLag(minLag: minLag, maxLag: maxLag, correlation: correlation) else {
-            return nil
+        guard let peak = dominantPeak(minLag: minLag, maxLag: maxLag, correlation: correlation) else {
+            return DetectionResult(frequency: nil, clarity: 0)
+        }
+        guard peak.value >= clarityThreshold else {
+            return DetectionResult(frequency: nil, clarity: peak.value)
         }
 
-        let refinedLag = parabolicRefinement(around: peakLag, minLag: minLag, maxLag: maxLag, correlation: correlation)
-        guard refinedLag > 0 else { return nil }
+        let refinedLag = parabolicRefinement(around: peak.lag, minLag: minLag, maxLag: maxLag, correlation: correlation)
+        guard refinedLag > 0 else { return DetectionResult(frequency: nil, clarity: peak.value) }
 
-        return Float(sampleRate) / refinedLag
+        return DetectionResult(frequency: Float(sampleRate) / refinedLag, clarity: peak.value)
     }
 
     // MARK: - Búsqueda de pico
 
-    /// Localiza el primer máximo local de la correlación (por lag) que supera `clarityThreshold`
-    /// y representa la periodicidad fundamental.
+    /// Localiza el mejor máximo local de la correlación (por lag) que representa la periodicidad
+    /// fundamental, junto con su valor.
     ///
     /// Cerca de lag pequeño la correlación es alta simplemente por la continuidad de la señal
     /// (dos muestras muy próximas de cualquier onda suave se parecen, sea o no periódica en ese lag),
-    /// así que no basta con cruzar `clarityThreshold` en el primer máximo que aparezca: primero hay
-    /// que dejar atrás esa caída inicial hasta su primer mínimo, y solo entonces mirar el siguiente
-    /// máximo local. Para una señal periódica, el máximo del periodo fundamental es normalmente el
-    /// más alto de toda la serie; los múltiplos del periodo (2x, 3x...) producen máximos igual de
-    /// altos más adelante, pero al preferir el primero que cruza el umbral evitamos los errores de
-    /// octava.
+    /// así que no basta con mirar el primer valor alto: primero hay que dejar atrás esa caída
+    /// inicial hasta su primer mínimo, y solo entonces buscar el siguiente máximo local. Para una
+    /// señal periódica, ese máximo cae en el periodo fundamental; los múltiplos del periodo (2x,
+    /// 3x...) producen máximos igual de altos más adelante, pero al preferir el primero que cruza
+    /// `clarityThreshold` evitamos los errores de octava.
     ///
     /// Ahora bien, con una señal real (varios armónicos con fases relativas arbitrarias, no una
     /// sinusoide pura) ese primer máximo local puede no ser el del periodo fundamental: la
@@ -94,28 +111,36 @@ struct PitchDetector {
     /// debajo del umbral). Si nos rendimos ahí, la nota parece "no sonar" aunque el periodo
     /// fundamental, un poco más adelante, tenga una correlación alta y clara. Por eso, si un máximo
     /// local no cruza el umbral, no se descarta la señal entera: se continúa buscando el siguiente
-    /// mínimo y máximo, hasta encontrar uno que sí lo cruce o agotar el rango de lags.
-    private func dominantPeakLag(minLag: Int, maxLag: Int, correlation: (Int) -> Float) -> Int? {
+    /// mínimo y máximo, recordando el mejor visto hasta ahora. Si ninguno llega a cruzar el umbral
+    /// en todo el rango, se devuelve igualmente ese mejor candidato (con su valor real, aunque bajo)
+    /// para que quien llama pueda diagnosticar la claridad conseguida en vez de recibir un `nil` sin
+    /// más información.
+    private func dominantPeak(minLag: Int, maxLag: Int, correlation: (Int) -> Float) -> (lag: Int, value: Float)? {
         guard maxLag > minLag + 1 else { return nil }
 
         var lag = minLag
+        var best: (lag: Int, value: Float)?
         while lag < maxLag {
             while lag < maxLag && correlation(lag + 1) < correlation(lag) {
                 lag += 1
             }
-            guard lag < maxLag else { return nil } // nunca remonta: no hay periodicidad clara
+            guard lag < maxLag else { break } // nunca remonta: no hay más periodicidad que explorar
 
             var peakLag = lag
             while peakLag < maxLag && correlation(peakLag + 1) >= correlation(peakLag) {
                 peakLag += 1
             }
 
-            if correlation(peakLag) >= clarityThreshold {
-                return peakLag
+            let value = correlation(peakLag)
+            if value >= clarityThreshold {
+                return (peakLag, value)
+            }
+            if best == nil || value > best!.value {
+                best = (peakLag, value)
             }
             lag = peakLag // este máximo no basta: seguir buscando más allá
         }
-        return nil
+        return best
     }
 
     // MARK: - Ventana de Hann

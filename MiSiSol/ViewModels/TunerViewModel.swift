@@ -50,6 +50,7 @@ nonisolated final class TunerViewModel {
     private let pitchDetector: PitchDetector
     private let audioEngine: AudioEngine
     private let toneGenerator: ToneGenerator
+    private let tuningStore: TuningStore
     /// Cola serial donde se ejecuta `PitchDetector.detectPitch`, fuera del hilo real-time de audio.
     /// Es serial (no la cola global concurrente) para que los buffers se procesen en el mismo
     /// orden en que llegan y no se solape el análisis de dos buffers a la vez.
@@ -57,7 +58,11 @@ nonisolated final class TunerViewModel {
 
     /// Margen de cents dentro del cual se considera "afinado".
     let inTuneCentsMargin: Double
-    /// Número de lecturas usadas en la media móvil de suavizado de la frecuencia detectada.
+    /// Número de lecturas usadas en la mediana móvil de suavizado de la frecuencia detectada.
+    /// Se usa mediana en vez de media a propósito: un pico de ruido de fondo puntual que por
+    /// casualidad supere el umbral de claridad del detector se queda como un valor suelto dentro
+    /// de la ventana y la mediana lo ignora por completo, mientras que una media lo dejaría
+    /// desplazar el resultado (y con ello la nota mostrada) en cada lectura suelta.
     private let smoothingWindowSize: Int
 
     // MARK: - Estado observable
@@ -76,6 +81,10 @@ nonisolated final class TunerViewModel {
     var detectedNote: Note?
     var centsOffset: Double = 0
     var status: TuningStatus = .noSignal
+    /// Claridad (0...1) de la última lectura, la haya aceptado el detector o no. Solo para
+    /// depuración en pantalla (ver TunerView): ayuda a saber si una señal real se está quedando
+    /// justo por debajo de `PitchDetector.clarityThreshold` o muy lejos de él.
+    var lastClarity: Float = 0
 
     private var recentFrequencies: [Float] = []
     private var wasListeningBeforeReferenceNote = false
@@ -93,12 +102,14 @@ nonisolated final class TunerViewModel {
         pitchDetector: PitchDetector = PitchDetector(),
         audioEngine: AudioEngine = AudioEngine(),
         toneGenerator: ToneGenerator = ToneGenerator(),
+        tuningStore: TuningStore = TuningStore(),
         inTuneCentsMargin: Double = 5.0,
         smoothingWindowSize: Int = 5,
         maxConsecutiveMissedReadings: Int = 3
     ) {
         self.instrument = instrument
-        self.tuning = .standard(for: instrument)
+        self.tuningStore = tuningStore
+        self.tuning = tuningStore.loadTuning(for: instrument) ?? .standard(for: instrument)
         self.pitchDetector = pitchDetector
         self.audioEngine = audioEngine
         self.toneGenerator = toneGenerator
@@ -117,15 +128,18 @@ nonisolated final class TunerViewModel {
 
     func selectInstrument(_ newInstrument: Instrument) {
         instrument = newInstrument
-        tuning = .standard(for: newInstrument)
+        tuning = tuningStore.loadTuning(for: newInstrument) ?? .standard(for: newInstrument)
         selectedStringIndex = 0
     }
 
+    /// Cambia la afinación activa y la recuerda para este instrumento entre sesiones (igual que
+    /// al elegir un preset, transportar, o aplicar una afinación personalizada: todas pasan por aquí).
     func selectTuning(_ newTuning: Tuning) {
         tuning = newTuning
         if !tuning.strings.indices.contains(selectedStringIndex) {
             selectedStringIndex = max(0, tuning.strings.count - 1)
         }
+        tuningStore.saveTuning(newTuning, for: instrument)
     }
 
     func transpose(bySemitones offset: Int) {
@@ -151,9 +165,10 @@ nonisolated final class TunerViewModel {
         // solo el salto final a @MainActor toca el hilo principal para actualizar la UI.
         try? audioEngine.start { [pitchDetector, pitchQueue, weak self] samples, sampleRate in
             pitchQueue.async {
-                let pitch = pitchDetector.detectPitch(in: samples, sampleRate: sampleRate)
+                let result = pitchDetector.detectPitchWithDiagnostics(in: samples, sampleRate: sampleRate)
                 Task { @MainActor in
-                    self?.processPitch(pitch)
+                    self?.lastClarity = result.clarity
+                    self?.processPitch(result.frequency)
                 }
             }
         }
@@ -166,7 +181,7 @@ nonisolated final class TunerViewModel {
     // MARK: - Procesado de pitch
 
     /// Procesa una nueva lectura de frecuencia (o `nil` si no hay señal clara): aplica el
-    /// suavizado (media móvil) y actualiza nota detectada, cents respecto a la cuerda objetivo
+    /// suavizado (mediana móvil) y actualiza nota detectada, cents respecto a la cuerda objetivo
     /// y estado. Público y directo para poder testear la lógica inyectando frecuencias
     /// simuladas, sin depender de AVAudioEngine real.
     func processPitch(_ frequency: Float?) {
@@ -186,7 +201,7 @@ nonisolated final class TunerViewModel {
         if recentFrequencies.count > smoothingWindowSize {
             recentFrequencies.removeFirst(recentFrequencies.count - smoothingWindowSize)
         }
-        let smoothed = recentFrequencies.reduce(0, +) / Float(recentFrequencies.count)
+        let smoothed = Self.median(of: recentFrequencies)
         detectedFrequency = smoothed
         detectedNote = Note.closest(to: Double(smoothed)).note
 
@@ -226,6 +241,16 @@ nonisolated final class TunerViewModel {
         let currentDistance = distances[selectedStringIndex]
         if currentDistance - nearestDistance >= autoSwitchHysteresisCents {
             selectedStringIndex = nearestIndex
+        }
+    }
+
+    private static func median(of values: [Float]) -> Float {
+        let sorted = values.sorted()
+        let mid = sorted.count / 2
+        if sorted.count.isMultiple(of: 2) {
+            return (sorted[mid - 1] + sorted[mid]) / 2
+        } else {
+            return sorted[mid]
         }
     }
 
