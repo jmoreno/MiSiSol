@@ -15,10 +15,15 @@ nonisolated final class ToneGenerator {
 
     private let engine = AVAudioEngine()
     private let sampleRate: Double
-    private var sourceNode: AVAudioSourceNode?
+    private let state = TonePhaseState()
+    private var isEngineRunning = false
 
     private(set) var isPlaying = false
     private(set) var currentFrequency: Float?
+
+    /// Duración del fundido de entrada/salida al empezar o parar una nota. Sin esto, la amplitud
+    /// salta de golpe entre 0 y el valor objetivo y se oye como un chasquido de estática.
+    private static let rampDuration: Double = 0.015
 
     init(sampleRate: Double = 44100) {
         self.sampleRate = sampleRate
@@ -40,10 +45,29 @@ nonisolated final class ToneGenerator {
         return samples
     }
 
-    /// Empieza a reproducir por el altavoz una nota continua a `frequency` Hz.
-    /// Si ya había una nota sonando, la sustituye.
+    /// Empieza a reproducir por el altavoz una nota continua a `frequency` Hz, con un fundido de
+    /// entrada corto para evitar chasquidos. Si ya había una nota sonando, cambia de frecuencia
+    /// sin reiniciar el motor de audio (reiniciarlo en cada nota es lo que producía el chasquido
+    /// al arrancar: enganchar/desenganchar la ruta de audio del hardware sí hace "pop" aunque la
+    /// forma de onda en sí no tenga ningún salto).
     func play(frequency: Float, amplitude: Float = 0.5) {
-        stop()
+        ensureEngineIsRunning()
+        state.targetFrequency = Double(frequency)
+        state.targetAmplitude = Double(amplitude)
+        isPlaying = true
+        currentFrequency = frequency
+    }
+
+    /// Dejar de sonar con un fundido de salida corto, en vez de parar el motor de golpe.
+    /// El motor se queda preparado (en silencio) para la próxima vez.
+    func stop() {
+        state.targetAmplitude = 0
+        isPlaying = false
+        currentFrequency = nil
+    }
+
+    private func ensureEngineIsRunning() {
+        guard !isEngineRunning else { return }
 
         // Se configura la sesión aquí (no solo en AudioEngine) para que reproducir una nota
         // funcione aunque la captura de micrófono no se haya llegado a arrancar todavía (p.ej.
@@ -60,17 +84,24 @@ nonisolated final class ToneGenerator {
         // 44.1kHz, por eso ahí no se notaba).
         let format = engine.mainMixerNode.outputFormat(forBus: 0)
         let effectiveSampleRate = format.sampleRate > 0 ? format.sampleRate : sampleRate
-        let phaseIncrement = 2.0 * Double.pi * Double(frequency) / effectiveSampleRate
-        // El estado de fase se aísla en una clase aparte (en vez de una propiedad de ToneGenerator)
-        // para que el closure de render de audio, que se ejecuta en el hilo real-time de audio,
-        // no capture `self` ni dependa de su aislamiento de actor.
-        let state = TonePhaseState()
+        state.rampStep = 1.0 / (Self.rampDuration * effectiveSampleRate)
 
-        let node = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList in
+        // El estado (fase, amplitud, objetivo) se aísla en una clase aparte (en vez de propiedades
+        // de ToneGenerator) para que el closure de render de audio, que se ejecuta en el hilo
+        // real-time de audio, no capture `self` ni dependa de su aislamiento de actor.
+        let node = AVAudioSourceNode(format: format) { [state] _, _, frameCount, audioBufferList in
             let bufferList = UnsafeMutableAudioBufferListPointer(audioBufferList)
             var phase = state.phase
+            var amplitude = state.currentAmplitude
+            let target = state.targetAmplitude
+            let phaseIncrement = 2.0 * Double.pi * state.targetFrequency / effectiveSampleRate
             for frame in 0..<Int(frameCount) {
-                let value = amplitude * Float(sin(phase))
+                if amplitude < target {
+                    amplitude = min(target, amplitude + state.rampStep)
+                } else if amplitude > target {
+                    amplitude = max(target, amplitude - state.rampStep)
+                }
+                let value = Float(amplitude) * Float(sin(phase))
                 phase += phaseIncrement
                 if phase > 2 * .pi { phase -= 2 * .pi }
                 for buffer in bufferList {
@@ -78,41 +109,32 @@ nonisolated final class ToneGenerator {
                 }
             }
             state.phase = phase
+            state.currentAmplitude = amplitude
             return noErr
         }
 
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: format)
-        sourceNode = node
 
         do {
             engine.prepare()
             try engine.start()
-            isPlaying = true
-            currentFrequency = frequency
+            isEngineRunning = true
         } catch {
             engine.detach(node)
-            sourceNode = nil
-            isPlaying = false
-            currentFrequency = nil
         }
-    }
-
-    /// Detiene la reproducción y libera el nodo generador.
-    func stop() {
-        guard let sourceNode else { return }
-        engine.stop()
-        engine.detach(sourceNode)
-        self.sourceNode = nil
-        isPlaying = false
-        currentFrequency = nil
     }
 }
 
-/// Estado mutable de fase para el closure de render de audio de `ToneGenerator.play`.
-/// `AVAudioSourceNode` invoca el closure en el hilo real-time de audio, que lo llama de forma
-/// serial por diseño, así que no hay condición de carrera real pese a que el compilador no
-/// pueda comprobarlo estáticamente.
+/// Estado compartido entre quien llama a `play()`/`stop()` (hilo principal) y el closure de
+/// render de audio (hilo real-time): `targetFrequency`/`targetAmplitude` los escribe el primero
+/// y los lee el segundo en cada callback; `phase`/`currentAmplitude`/`rampStep` solo los toca el
+/// hilo de render. Son todo `Double` sencillos con un único escritor y un único lector por campo,
+/// lectura/escritura atómica a nivel de hardware: suficiente aquí sin necesidad de un lock.
 nonisolated private final class TonePhaseState: @unchecked Sendable {
     var phase: Double = 0
+    var currentAmplitude: Double = 0
+    var rampStep: Double = 1
+    var targetFrequency: Double = 440
+    var targetAmplitude: Double = 0
 }
