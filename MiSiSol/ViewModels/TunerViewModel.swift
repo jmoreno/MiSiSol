@@ -57,7 +57,11 @@ nonisolated final class TunerViewModel {
 
     /// Margen de cents dentro del cual se considera "afinado".
     let inTuneCentsMargin: Double
-    /// Número de lecturas usadas en la media móvil de suavizado de la frecuencia detectada.
+    /// Número de lecturas usadas en la mediana móvil de suavizado de la frecuencia detectada.
+    /// Se usa mediana en vez de media a propósito: un pico de ruido de fondo puntual que por
+    /// casualidad supere el umbral de claridad del detector se queda como un valor suelto dentro
+    /// de la ventana y la mediana lo ignora por completo, mientras que una media lo dejaría
+    /// desplazar el resultado (y con ello la nota mostrada) en cada lectura suelta.
     private let smoothingWindowSize: Int
 
     // MARK: - Estado observable
@@ -171,7 +175,7 @@ nonisolated final class TunerViewModel {
     // MARK: - Procesado de pitch
 
     /// Procesa una nueva lectura de frecuencia (o `nil` si no hay señal clara): aplica el
-    /// suavizado (media móvil) y actualiza nota detectada, cents respecto a la cuerda objetivo
+    /// suavizado (mediana móvil) y actualiza nota detectada, cents respecto a la cuerda objetivo
     /// y estado. Público y directo para poder testear la lógica inyectando frecuencias
     /// simuladas, sin depender de AVAudioEngine real.
     func processPitch(_ frequency: Float?) {
@@ -191,7 +195,7 @@ nonisolated final class TunerViewModel {
         if recentFrequencies.count > smoothingWindowSize {
             recentFrequencies.removeFirst(recentFrequencies.count - smoothingWindowSize)
         }
-        let smoothed = recentFrequencies.reduce(0, +) / Float(recentFrequencies.count)
+        let smoothed = Self.median(of: recentFrequencies)
         detectedFrequency = smoothed
         detectedNote = Note.closest(to: Double(smoothed)).note
 
@@ -231,6 +235,16 @@ nonisolated final class TunerViewModel {
         let currentDistance = distances[selectedStringIndex]
         if currentDistance - nearestDistance >= autoSwitchHysteresisCents {
             selectedStringIndex = nearestIndex
+        }
+    }
+
+    private static func median(of values: [Float]) -> Float {
+        let sorted = values.sorted()
+        let mid = sorted.count / 2
+        if sorted.count.isMultiple(of: 2) {
+            return (sorted[mid - 1] + sorted[mid]) / 2
+        } else {
+            return sorted[mid]
         }
     }
 

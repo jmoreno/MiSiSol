@@ -9,16 +9,23 @@ import XCTest
 @MainActor
 final class TunerViewModelTests: XCTestCase {
 
-    func testSmoothingAveragesRecentFrequencies() {
-        let vm = TunerViewModel(instrument: .guitar, smoothingWindowSize: 4)
+    func testSmoothingIgnoresIsolatedOutlierReading() {
+        let vm = TunerViewModel(instrument: .guitar, smoothingWindowSize: 5)
 
-        for _ in 0..<4 { vm.processPitch(110) }
+        for _ in 0..<5 { vm.processPitch(110) }
         XCTAssertEqual(vm.detectedFrequency ?? 0, 110, accuracy: 0.01)
 
-        // Una lectura puntual desviada no debe mover la media al valor crudo: se suaviza.
-        vm.processPitch(150)
-        let expected: Float = (110 * 3 + 150) / 4
-        XCTAssertEqual(vm.detectedFrequency ?? 0, expected, accuracy: 0.01)
+        // Un pico de ruido de fondo puntual (una lectura suelta muy distinta) no debe mover la
+        // mediana: a diferencia de una media, la mediana ignora por completo un único valor
+        // extremo mientras el resto de la ventana siga de acuerdo.
+        vm.processPitch(300)
+        XCTAssertEqual(vm.detectedFrequency ?? 0, 110, accuracy: 0.01)
+
+        // Pero si la nueva frecuencia se sostiene (bastan un par de lecturas más, en cuanto
+        // domina la ventana de 5), la mediana la termina reflejando: ya no es un pico puntual.
+        vm.processPitch(300)
+        vm.processPitch(300)
+        XCTAssertEqual(vm.detectedFrequency ?? 0, 300, accuracy: 0.01)
     }
 
     func testStatusInTuneWithinCentsMargin() {
