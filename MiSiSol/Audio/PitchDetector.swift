@@ -75,32 +75,47 @@ struct PitchDetector {
 
     // MARK: - Búsqueda de pico
 
-    /// Localiza el primer máximo local de la correlación (por lag) que representa la
-    /// periodicidad fundamental.
+    /// Localiza el primer máximo local de la correlación (por lag) que supera `clarityThreshold`
+    /// y representa la periodicidad fundamental.
     ///
     /// Cerca de lag pequeño la correlación es alta simplemente por la continuidad de la señal
     /// (dos muestras muy próximas de cualquier onda suave se parecen, sea o no periódica en ese lag),
-    /// así que no basta con cruzar `clarityThreshold`: primero hay que dejar atrás esa caída inicial
-    /// hasta su primer mínimo, y solo entonces buscar el siguiente máximo local. Para una señal
-    /// periódica, ese máximo cae en el periodo fundamental; los múltiplos del periodo (2x, 3x...)
-    /// producen máximos igual de altos más adelante, pero al quedarnos con el primero evitamos
-    /// los errores de octava.
+    /// así que no basta con cruzar `clarityThreshold` en el primer máximo que aparezca: primero hay
+    /// que dejar atrás esa caída inicial hasta su primer mínimo, y solo entonces mirar el siguiente
+    /// máximo local. Para una señal periódica, el máximo del periodo fundamental es normalmente el
+    /// más alto de toda la serie; los múltiplos del periodo (2x, 3x...) producen máximos igual de
+    /// altos más adelante, pero al preferir el primero que cruza el umbral evitamos los errores de
+    /// octava.
+    ///
+    /// Ahora bien, con una señal real (varios armónicos con fases relativas arbitrarias, no una
+    /// sinusoide pura) ese primer máximo local puede no ser el del periodo fundamental: la
+    /// interferencia entre armónicos puede producir mínimos y máximos intermedios *antes* de llegar
+    /// al lag del periodo real, y esos máximos intermedios suelen tener una correlación baja (por
+    /// debajo del umbral). Si nos rendimos ahí, la nota parece "no sonar" aunque el periodo
+    /// fundamental, un poco más adelante, tenga una correlación alta y clara. Por eso, si un máximo
+    /// local no cruza el umbral, no se descarta la señal entera: se continúa buscando el siguiente
+    /// mínimo y máximo, hasta encontrar uno que sí lo cruce o agotar el rango de lags.
     private func dominantPeakLag(minLag: Int, maxLag: Int, correlation: (Int) -> Float) -> Int? {
         guard maxLag > minLag + 1 else { return nil }
 
         var lag = minLag
-        while lag < maxLag && correlation(lag + 1) < correlation(lag) {
-            lag += 1
-        }
-        guard lag < maxLag else { return nil } // nunca remonta: no hay periodicidad clara
+        while lag < maxLag {
+            while lag < maxLag && correlation(lag + 1) < correlation(lag) {
+                lag += 1
+            }
+            guard lag < maxLag else { return nil } // nunca remonta: no hay periodicidad clara
 
-        var peakLag = lag
-        while peakLag < maxLag && correlation(peakLag + 1) >= correlation(peakLag) {
-            peakLag += 1
-        }
+            var peakLag = lag
+            while peakLag < maxLag && correlation(peakLag + 1) >= correlation(peakLag) {
+                peakLag += 1
+            }
 
-        guard correlation(peakLag) >= clarityThreshold else { return nil }
-        return peakLag
+            if correlation(peakLag) >= clarityThreshold {
+                return peakLag
+            }
+            lag = peakLag // este máximo no basta: seguir buscando más allá
+        }
+        return nil
     }
 
     // MARK: - Ventana de Hann
