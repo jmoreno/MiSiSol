@@ -1,0 +1,105 @@
+[
+  {
+    "file": "guitar_E2.wav",
+    "instrument": "guitar",
+    "note": "E2",
+    "expectedFrequency": 82.41,
+    "toleranceCents": 20
+  },
+  {
+    "file": "guitar_A2.wav",
+    "instrument": "guitar",
+    "note": "A2",
+    "expectedFrequency": 110.00,
+    "toleranceCents": 20
+  },
+  {
+    "file": "guitar_D3.wav",
+    "instrument": "guitar",
+    "note": "D3",
+    "expectedFrequency": 146.83,
+    "toleranceCents": 20
+  },
+  {
+    "file": "guitar_G3.wav",
+    "instrument": "guitar",
+    "note": "G3",
+    "expectedFrequency": 196.00,
+    "toleranceCents": 20,
+    "comment": "Antes de la corrección de octava (ver PitchDetector.correctOctave) esta grabación se detectaba una octava por encima (~392Hz)."
+  },
+  {
+    "file": "guitar_B3.wav",
+    "instrument": "guitar",
+    "note": "B3",
+    "expectedFrequency": 246.94,
+    "toleranceCents": 80,
+    "comment": "Tolerancia ampliada: al grabar, esta cuerda estaba desafinada de origen (~65 cents por encima de B3 de forma estable, no ruido), no un fallo de detección. Ver historial de depuración en Docs/Specs.md."
+  },
+  {
+    "file": "guitar_E4.wav",
+    "instrument": "guitar",
+    "note": "E4",
+    "expectedFrequency": 329.63,
+    "toleranceCents": 20
+  },
+  {
+    "file": "bass_E1.wav",
+    "instrument": "bass",
+    "note": "E1",
+    "expectedFrequency": 41.20,
+    "toleranceCents": 50,
+    "comment": "Tolerancia ampliada: al grabar, esta cuerda estaba desafinada de origen (~20-37 cents por encima de E1), no un fallo de detección. Ver historial de depuración en Docs/Specs.md."
+  },
+  {
+    "file": "bass_A1.wav",
+    "instrument": "bass",
+    "note": "A1",
+    "expectedFrequency": 55.00,
+    "toleranceCents": 50,
+    "comment": "Tolerancia ampliada: al grabar, esta cuerda estaba desafinada de origen (~34 cents por encima de A1), no un fallo de detección. Ver historial de depuración en Docs/Specs.md."
+  },
+  {
+    "file": "bass_D2.wav",
+    "instrument": "bass",
+    "note": "D2",
+    "expectedFrequency": 73.42,
+    "toleranceCents": 35,
+    "comment": "Antes de la corrección de octava esta grabación se detectaba una octava por encima (~D3, ~147Hz)."
+  },
+  {
+    "file": "bass_G2.wav",
+    "instrument": "bass",
+    "note": "G2",
+    "expectedFrequency": 98.00,
+    "toleranceCents": 30
+  },
+  {
+    "file": "ukulele_G4.wav",
+    "instrument": "ukulele",
+    "note": "G4",
+    "expectedFrequency": 392.00,
+    "toleranceCents": 20
+  },
+  {
+    "file": "ukulele_C4.wav",
+    "instrument": "ukulele",
+    "note": "C4",
+    "expectedFrequency": 261.63,
+    "toleranceCents": 20
+  },
+  {
+    "file": "ukulele_E4.wav",
+    "instrument": "ukulele",
+    "note": "E4",
+    "expectedFrequency": 329.63,
+    "toleranceCents": 20
+  },
+  {
+    "file": "ukulele_A4.wav",
+    "instrument": "ukulele",
+    "note": "A4",
+    "expectedFrequency": 440.00,
+    "toleranceCents": 20
+  }
+]
