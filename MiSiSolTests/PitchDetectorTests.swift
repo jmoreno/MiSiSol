@@ -126,10 +126,59 @@ final class PitchDetectorTests: XCTestCase {
     }
 
     func testDiagnosticsReportClarityEvenWhenBelowThreshold() {
-        let strictDetector = PitchDetector(clarityThreshold: 0.999)
+        // 1.5 es un umbral imposible de alcanzar (la claridad, un coeficiente de correlación,
+        // nunca supera 1): a propósito, para no acoplar el test a lo cerca de 1.0 que llegue una
+        // sinusoide limpia en la implementación actual (con diezmado y sin ventana de Hann llega
+        // a ~0.9998, por lo que un umbral como 0.999 dejaría de fallar y rompería este test).
+        let strictDetector = PitchDetector(clarityThreshold: 1.5)
         let buffer = sineWave(frequency: 220)
         let result = strictDetector.detectPitchWithDiagnostics(in: buffer, sampleRate: sampleRate)
         XCTAssertNil(result.frequency)
         XCTAssertGreaterThan(result.clarity, 0.5) // por debajo del umbral exigido, pero no cero
+    }
+
+    // MARK: - Diezmado
+
+    func testDecimationFactorAt48kHzHardwareSampleRateIsFour() {
+        // Caso de referencia del historial de depuración: a 48kHz (la frecuencia de muestreo real
+        // de la mayoría de dispositivos) con maxFrequency=1200Hz, diezmar por 4 deja 12kHz, 10x
+        // maxFrequency de margen de sobra sobre el mínimo de Nyquist (2x).
+        XCTAssertEqual(PitchDetector.decimationFactor(for: 48000, maxFrequency: 1200), 4)
+    }
+
+    func testDecimationFactorNeverGoesBelowOne() {
+        // A una frecuencia de muestreo baja (o un maxFrequency alto) donde ni el propio hardware
+        // llega a 10x maxFrequency, no tiene sentido "diezmar por 0": no se diezma en absoluto.
+        XCTAssertEqual(PitchDetector.decimationFactor(for: 8000, maxFrequency: 1200), 1)
+    }
+
+    func testDetectsAccuratelyAt48kHzSampleRate() {
+        // El hardware real no siempre está a 44.1kHz (el valor que usan el resto de tests): hay
+        // que confirmar que el diezmado (activado por defecto) no introduce error a la frecuencia
+        // de muestreo real de la mayoría de dispositivos.
+        let sr: Double = 48000
+        let frequency = 110.0
+        let sampleCount = Int(sr * 0.2)
+        let buffer = (0..<sampleCount).map { i in
+            Float(0.8 * sin(2.0 * Double.pi * frequency * Double(i) / sr))
+        }
+        let detected = detector.detectPitch(in: buffer, sampleRate: sr)
+        XCTAssertNotNil(detected)
+        guard let detected else { return }
+        XCTAssertEqual(detected, Float(frequency), accuracy: Float(frequency) * 0.01)
+    }
+
+    func testDecimationDoesNotChangeDetectionCompatedToNotDecimating() {
+        let withDecimation = PitchDetector(usesDecimation: true)
+        let withoutDecimation = PitchDetector(usesDecimation: false)
+        let buffer = sineWave(frequency: 196.00)
+
+        let detectedWithDecimation = withDecimation.detectPitch(in: buffer, sampleRate: sampleRate)
+        let detectedWithoutDecimation = withoutDecimation.detectPitch(in: buffer, sampleRate: sampleRate)
+
+        XCTAssertNotNil(detectedWithDecimation)
+        XCTAssertNotNil(detectedWithoutDecimation)
+        guard let detectedWithDecimation, let detectedWithoutDecimation else { return }
+        XCTAssertEqual(detectedWithDecimation, detectedWithoutDecimation, accuracy: 1.0, "Diezmar no debería cambiar perceptiblemente la frecuencia detectada")
     }
 }
