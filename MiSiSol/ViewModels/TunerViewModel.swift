@@ -307,12 +307,23 @@ nonisolated final class TunerViewModel {
     }
 
     /// Detiene la nota de referencia y reanuda la escucha si estaba activa antes de reproducirla.
+    ///
+    /// `toneGenerator.stop()` no para su `AVAudioEngine` de golpe: solo inicia un fundido de
+    /// salida de `ToneGenerator.rampDuration` (para no chascar) y lo deja "caliente" para la
+    /// próxima nota. Como `AudioEngine` usa ahora la categoría `.record` (que no admite
+    /// reproducción) mientras que `ToneGenerator` usa `.playback`, reclamar la sesión para
+    /// escuchar mientras ese fundido todavía está sonando es el momento más delicado de la
+    /// transición entre categorías. Esperar a que el fundido termine antes de llamar a
+    /// `startListening()` reduce el riesgo, aunque sin poder probarlo en dispositivo real desde
+    /// aquí no hay garantía completa: si en dispositivo se detecta algún problema en esta
+    /// secuencia concreta, es el primer sitio donde mirar.
     func stopReferenceNote() {
         toneGenerator.stop()
         isPlayingReferenceNote = false
-        if wasListeningBeforeReferenceNote {
-            wasListeningBeforeReferenceNote = false
-            startListening()
+        guard wasListeningBeforeReferenceNote else { return }
+        wasListeningBeforeReferenceNote = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + ToneGenerator.rampDuration) { [weak self] in
+            self?.startListening()
         }
     }
 }

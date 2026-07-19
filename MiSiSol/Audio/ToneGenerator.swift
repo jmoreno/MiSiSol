@@ -23,7 +23,9 @@ nonisolated final class ToneGenerator {
 
     /// Duración del fundido de entrada/salida al empezar o parar una nota. Sin esto, la amplitud
     /// salta de golpe entre 0 y el valor objetivo y se oye como un chasquido de estática.
-    private static let rampDuration: Double = 0.015
+    /// No es `private`: `TunerViewModel` la usa para esperar a que el fundido de salida termine
+    /// antes de devolverle la sesión de audio a `AudioEngine` (ver `stopReferenceNote`).
+    static let rampDuration: Double = 0.015
 
     init(sampleRate: Double = 44100) {
         self.sampleRate = sampleRate
@@ -70,11 +72,15 @@ nonisolated final class ToneGenerator {
     /// Configura la sesión de audio para reproducción en cada `play()` (no solo la primera vez),
     /// para que reproducir una nota funcione aunque la captura de micrófono no se haya llegado a
     /// arrancar todavía (p.ej. el usuario pulsa "Reproducir" mientras se resuelve el permiso de
-    /// micrófono al abrir la app). AudioEngine usa el mismo modo `.default` al escuchar, así que
-    /// esto ya no compite con la sesión que deja la captura al terminar.
+    /// micrófono al abrir la app).
+    ///
+    /// Categoría `.playback` (no `.playAndRecord`): no necesitamos capturar nada mientras suena la
+    /// referencia, y así no compite con la categoría `.record` que usa `AudioEngine` al escuchar
+    /// (solo una puede estar activa a la vez). `.playback` ya enruta al altavoz y admite salida
+    /// Bluetooth A2DP sin necesidad de opciones adicionales.
     private func configureSessionForPlayback() {
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+        try? session.setCategory(.playback, mode: .default)
         try? session.setActive(true)
     }
 

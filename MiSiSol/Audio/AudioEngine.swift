@@ -57,13 +57,25 @@ nonisolated final class AudioEngine {
         stop()
 
         let session = AVAudioSession.sharedInstance()
-        // El modo .measurement se probó para evitar el procesado de voz de .default en
-        // .playAndRecord, pero también desactiva el control automático de ganancia de *entrada*:
-        // sin tocar el móvil pegado al instrumento, la señal capturada queda floja y eso bajaba
-        // la claridad de la autocorrelación en general (no solo en cuerdas graves). .default con
-        // AGC da una señal más fuerte a costa de algo de procesado, mejor tradeoff aquí.
-        try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+        // .record (no .playAndRecord: mientras se escucha no se reproduce nada — playReferenceNote()
+        // ya para esta captura antes de sonar) + .measurement, sin AGC/cancelación de eco/supresión
+        // de ruido: ese procesado, pensado para llamadas, atenúa señales tonales sostenidas y
+        // graves, justo las fundamentales de E2 (82Hz) y E1 (41Hz). Sin `.allowBluetooth`: un
+        // micrófono Bluetooth por HFP tiene banda de voz (~300-3400Hz) muy lejos del instrumento,
+        // así que si hay auriculares o un coche emparejados no queremos que la entrada se enrute ahí.
+        //
+        // Nota histórica (ver Specs.md): `.measurement` ya se probó una vez y se revirtió a
+        // `.default` porque "la señal quedaba floja y bajaba la claridad". Aquella prueba se hizo
+        // sin el diezmado ni el backpressure de `PitchAnalysisGate`, así que probablemente estaba
+        // contaminada por el atasco de la cola de análisis, no por la ausencia de AGC en sí: la
+        // correlación normalizada es invariante a la amplitud, lo que importa es la relación
+        // señal/ruido, no el volumen. `setInputGain` de abajo compensa la falta de AGC cuando el
+        // hardware lo permite.
+        try session.setCategory(.record, mode: .measurement)
         try session.setActive(true)
+        if session.isInputGainSettable {
+            try? session.setInputGain(1.0)
+        }
 
         let inputNode = engine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
