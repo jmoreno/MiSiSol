@@ -188,10 +188,13 @@ nonisolated final class AudioEngine {
 
         switch type {
         case .began:
-            // El sistema para la captura por su cuenta al empezar la interrupción; solo
-            // reflejamos el estado y recordamos si había que reanudarla al terminar.
+            // El sistema para el motor por su cuenta al empezar la interrupción, pero el tap del
+            // input node no se retira solo: si aquí solo reflejáramos `isRunning = false` sin
+            // llamar a `stop()`, `beginCapture()` intentaría instalar un tap nuevo encima del que
+            // sigue registrado al reanudar, y AVAudioEngine lanza una excepción ObjC sin capturar
+            // (crash). `stop()` ya guarda `isRunning` antes de tocar nada, así que se lee aquí.
             wasRunningBeforeInterruption = isRunning
-            isRunning = false
+            stop()
         case .ended:
             defer { wasRunningBeforeInterruption = false }
             guard wasRunningBeforeInterruption else { return }

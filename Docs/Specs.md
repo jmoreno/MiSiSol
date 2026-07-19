@@ -42,10 +42,12 @@ MiSiSolTests/
 ├── TuningStoreTests.swift
 ├── PitchDetectorTests.swift
 ├── PitchAnalysisGateTests.swift
-├── PitchDetectionCorpusTests.swift  // corpus de grabaciones reales, ver Fixtures/README.md
-├── Fixtures/                        // 14 grabaciones reales + manifest.json (nota esperada, tolerancia)
+├── PitchDetectionCorpusTests.swift        // corpus de grabaciones reales, ver Fixtures/README.md
+├── Fixtures/                              // 14 grabaciones reales + manifest.json (nota esperada, tolerancia)
 ├── ToneGeneratorTests.swift
-└── TunerViewModelTests.swift
+├── TunerViewModelTests.swift
+├── AudioEngineTests.swift                 // interrupciones/cambios de ruta, publicando las notificaciones reales
+└── TunerViewModelAudioIntegrationTests.swift  // escuchar→referencia→parar→escuchar con AVAudioEngine real
 ```
 
 ## Detalles de implementación
@@ -276,6 +278,19 @@ necesarios para tocar estado observable se hacen a mano donde corresponde (`Task
 - **TunerViewModelTests**: suavizado, estado afinado/sube/baja, cambio de instrumento/afinación/
   cuerda, modo automático (selección de cuerda más cercana, histéresis), y tolerancia a lecturas
   fallidas puntuales — todo inyectando frecuencias directamente, sin AVAudioEngine real.
+- **AudioEngineTests**: interrupciones y cambios de ruta publicando en `NotificationCenter` las
+  mismas notificaciones reales que dispararía el sistema (`AVAudioSession.interruptionNotification`,
+  `.routeChangeNotification`), con `AVAudioEngine` real arrancado de verdad. No sustituye a probarlo
+  con hardware real (una llamada entrante de verdad, un auricular Bluetooth real), pero ejercita
+  exactamente el mismo código de observers/reintento — encontró un crash real (ver punto 7 del
+  historial). Son tests `async` con `Task.sleep` para dar margen a que el `DispatchQueue.main.async`
+  de los observers se procese.
+- **TunerViewModelAudioIntegrationTests**: la secuencia completa escuchar → reproducir nota de
+  referencia → parar → seguir escuchando, con `AudioEngine`/`ToneGenerator` reales (no las
+  dependencias por defecto de `TunerViewModelTests`). A diferencia de `AudioEngineTests`, son tests
+  **síncronos** que bombean el run loop a mano con `RunLoop.current.run(until:)`: este flujo depende
+  de un `DispatchQueue.main.asyncAfter` (un timer, no un `.async` inmediato), que no se dispara
+  durante un `Task.sleep` dentro de un test `async` — ver punto 7 del historial para el porqué.
 
 ## Historial de depuración de detección de pitch en dispositivo real
 
@@ -361,6 +376,36 @@ grabaciones sin regresiones, pero la sensación de uso real no había mejorado p
    (provocar una llamada entrante, conectar/desconectar auriculares, etc.) antes de darlos por
    buenos.
 
+7. **Primera compilación real de todo lo anterior (con Xcode disponible) y dos bugs que la lectura
+   de código no había detectado.** `xcodebuild test` reveló dos problemas reales en cuanto se pudo
+   ejecutar:
+   - **`PitchAnalysisGate` sin `nonisolated`**: la misma familia de crash de concurrencia que ya
+     había aparecido con `AudioEngine`/`ToneGenerator`/`TunerViewModel` (aislamiento a `@MainActor`
+     por defecto del módulo + `deinit` con salto de actor, que crashea en este toolchain). Al ser
+     una clase nueva, no se le había puesto el marcador — hacía fallar prácticamente todos los
+     tests de `TunerViewModelTests` con `___BUG_IN_CLIENT_OF_LIBMALLOC_POINTER_BEING_FREED_WAS_NOT_ALLOCATED`.
+   - **Crash real en `AudioEngine.handleInterruption`**: al empezar una interrupción, el código
+     solo hacía `isRunning = false` sin quitar el tap de verdad (el comentario asumía que el
+     sistema lo hacía por su cuenta al parar el motor; no es así). Al terminar la interrupción,
+     `beginCapture()` intentaba instalar un tap nuevo encima del que seguía registrado, y
+     `AVAudioEngine` lanza una excepción ObjC sin capturar → crash. Se encontró con un test que
+     publica la notificación real de interrupción (`AudioEngineTests`) y se corrigió llamando a
+     `stop()` (que sí quita el tap) en vez de solo tocar la propiedad.
+   - Con ambos arreglados, la suite completa pasa: 78 tests, incluidos los dos nuevos ficheros
+     (`AudioEngineTests`, `TunerViewModelAudioIntegrationTests`) que ejercitan interrupciones,
+     cambios de ruta, y la secuencia escuchar→referencia→parar→escuchar con audio real (no mocks).
+   - Nota sobre metodología: la primera versión de `TunerViewModelAudioIntegrationTests` daba un
+     falso positivo (parecía que la escucha no se reanudaba tras la nota de referencia) porque
+     usaba tests `async` con `Task.sleep`, que no bombean el run loop real del hilo principal — y
+     `stopReferenceNote()` depende de un `DispatchQueue.main.asyncAfter` (un timer) para reanudar.
+     Reescribiendo el test como síncrono con `RunLoop.current.run(until:)` (más fiel a cómo corre
+     la app real, con `UIApplicationMain` bombeando el run loop de verdad) el test pasa limpio: la
+     secuencia sí funciona, el problema era del arnés de test, no del código de producción.
+   - Lo que sigue sin poder verificarse desde aquí, ni con estos trucos: Bluetooth real (el
+     simulador no tiene pila Bluetooth de audio) y una interrupción/cambio de ruta genuinamente
+     disparados por el sistema (llamada entrante real, auriculares físicos). Ver la sección
+     siguiente para el detalle actualizado.
+
 ## Estado actual y preguntas abiertas
 
 El patrón de esta depuración fue, durante un tiempo: probar en dispositivo → encontrar un síntoma
@@ -392,21 +437,37 @@ tras el punto 6:
 
 ## Verificación pendiente en dispositivo real
 
-Los cambios del punto 6 del historial se han escrito y razonado con cuidado, pero desde este
-entorno no hay Xcode, simulador, ni dispositivo real disponible: no se ha podido compilar el
-proyecto ni ejecutar `xcodebuild test`. Antes de dar la ronda por buena, falta comprobar en
-dispositivo real (o en el simulador, para lo que no dependa de hardware real):
+Los seis puntos siguientes se plantearon cuando esta ronda de cambios no se había podido ni
+compilar. Ya hay acceso a Xcode (aunque no a un iPhone físico): esto es lo que se ha podido
+verificar desde ahí y lo que sigue dependiendo genuinamente de un dispositivo real (ver punto 7
+del historial para el detalle de cómo se verificó cada uno).
 
-1. `xcodebuild test` en verde, incluido el corpus (`PitchDetectionCorpusTests`, que ahora sí
-   debería ejecutarse de verdad, no saltarse, porque los `.wav` están en el repo).
-2. En Release (o Debug con `-O`): con la app recién abierta en silencio, la claridad debe
-   actualizarse fluida, sin congelarse ni ir con retraso; al tocar una cuerda, la nota debe
-   aparecer en menos de ~medio segundo.
-3. Con AirPods u otros auriculares Bluetooth emparejados: la captura debe seguir usando el
-   micrófono del propio iPhone, no el del auricular.
-4. La secuencia escuchar → reproducir nota de referencia → parar → seguir afinando (el momento
-   delicado documentado en `TunerViewModel.stopReferenceNote()`).
-5. Provocar una interrupción real (llamada entrante o Siri) y comprobar que la escucha se reanuda
-   sola al terminar.
-6. Conectar/desconectar unos auriculares mientras se escucha, y comprobar que la captura se
-   reinstala con el hardware nuevo en vez de quedarse con el formato antiguo.
+1. ~~`xcodebuild test` en verde~~ **Verificado.** 78 tests en verde, incluido el corpus
+   (`PitchDetectionCorpusTests` se ejecuta de verdad, no se salta). Se encontraron y corrigieron
+   dos bugs reales en el proceso (`PitchAnalysisGate` sin `nonisolated`, tap no retirado en
+   `handleInterruption`) que la lectura de código no había detectado.
+2. ~~Claridad fluida, sin congelarse; nota en <0.5s al tocar~~ **Parcialmente verificado.**
+   Con una build de Debug optimizada (`-O`, para conservar la UI de DEBUG), la claridad se
+   actualiza en directo sin congelarse (confirmado con capturas separadas en el tiempo). El
+   requisito de "<0.5s al tocar una cuerda" no se ha podido verificar porque el simulador no tiene
+   una guitarra real que tocar — sigue pendiente de confirmar con instrumento real.
+3. **Bluetooth: sigue sin poder verificarse desde aquí.** El simulador de iOS no tiene pila
+   Bluetooth de audio real; no hay forma de emparejar unos AirPods simulados. Genuinamente
+   pendiente de dispositivo real.
+4. ~~Secuencia escuchar → referencia → parar → seguir afinando~~ **Verificado**, con
+   `TunerViewModelAudioIntegrationTests` (`AudioEngine`/`ToneGenerator` reales, no mocks): tras
+   parar la nota de referencia, la escucha se reanuda sola. La primera versión del test dio un
+   falso positivo por un problema del arnés de test (ver punto 7), no del código de producción.
+5. ~~Interrupción real (llamada/Siri)~~ **Verificado por aproximación**, publicando la notificación
+   real de `AVAudioSession` que el sistema mandaría (`AudioEngineTests`) — no es una llamada
+   entrante genuina, pero ejercita el mismo código de observers/reintento. Encontró el crash del
+   tap no retirado (punto 7), ya corregido. Una interrupción disparada por el sistema de verdad
+   sigue sin poder confirmarse desde aquí.
+6. ~~Conectar/desconectar auriculares~~ **Verificado por aproximación**, mismo mecanismo que el
+   punto 5 (notificación de cambio de ruta publicada a mano). El comportamiento con auriculares
+   físicos reales sigue pendiente de confirmar.
+
+En resumen: de los seis, el 1 está verificado sin matices, el 2 y el 4 están verificados hasta
+donde el simulador lo permite, y el 3/5/6 tienen verificación por aproximación o nula porque
+dependen de hardware que el simulador no puede reproducir fielmente — seguirá haciendo falta
+probarlos en un iPhone real antes de darlos por completamente resueltos.

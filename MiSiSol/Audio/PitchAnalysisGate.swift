@@ -17,7 +17,14 @@ import os
 /// `tryEnter()` está pensado para llamarse desde el hilo real-time de captura de audio, así que
 /// usa un intento de bloqueo que nunca espera (`withLockIfAvailable`) en vez de un lock normal:
 /// bloquear ese hilo, aunque fuera brevemente, puede hacer que se pierdan buffers de verdad.
-final class PitchAnalysisGate {
+///
+/// `nonisolated` por la misma razón que `AudioEngine`/`ToneGenerator`/`TunerViewModel`: sin esto,
+/// el aislamiento a `@MainActor` por defecto del módulo genera un `deinit` con salto de actor que
+/// crashea (`___BUG_IN_CLIENT_OF_LIBMALLOC_POINTER_BEING_FREED_WAS_NOT_ALLOCATED`) en este
+/// toolchain al liberarse `TunerViewModel` — se confirmó reproduciéndolo con `xcodebuild test`.
+/// Además, `tryEnter()`/`leave()` se llaman desde el hilo real-time de captura, así que ni
+/// siquiera sería seguro que estuvieran aislados a `@MainActor`.
+nonisolated final class PitchAnalysisGate {
     private let isBusy = OSAllocatedUnfairLock(initialState: false)
 
     /// Intenta marcar "análisis en curso". Devuelve `true` si lo consigue (no había ninguno en
