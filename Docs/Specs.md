@@ -27,6 +27,7 @@ MiSiSol/
 ├── Audio/
 │   ├── AudioEngine.swift        // wrapper sobre AVAudioEngine, captura del micrófono
 │   ├── PitchDetector.swift      // detección de pitch por autocorrelación
+│   ├── PitchAnalysisGate.swift  // backpressure: descarta buffers si el análisis anterior sigue en curso
 │   └── ToneGenerator.swift      // generador + reproductor de nota de referencia
 ├── ViewModels/
 │   └── TunerViewModel.swift     // @Observable, conecta audio con la UI
@@ -40,6 +41,9 @@ MiSiSolTests/
 ├── TuningTests.swift
 ├── TuningStoreTests.swift
 ├── PitchDetectorTests.swift
+├── PitchAnalysisGateTests.swift
+├── PitchDetectionCorpusTests.swift  // corpus de grabaciones reales, ver Fixtures/README.md
+├── Fixtures/                        // 14 grabaciones reales + manifest.json (nota esperada, tolerancia)
 ├── ToneGeneratorTests.swift
 └── TunerViewModelTests.swift
 ```
@@ -65,8 +69,8 @@ MiSiSolTests/
 - `Tuning.alternates(for:)`: afinaciones alternativas predefinidas (Drop D para guitarra).
 
 ### PitchDetector.swift
-- Autocorrelación (ACF) con ventana Hann sobre `[Float]` + `sampleRate`, sin depender de
-  AVAudioEngine — testeable con señales sintéticas.
+- Autocorrelación (ACF) sobre `[Float]` + `sampleRate`, sin depender de AVAudioEngine — testeable
+  con señales sintéticas.
 - Busca el mejor máximo local de la correlación normalizada, recorriendo lags de menor a mayor
   (de frecuencia más aguda a más grave): salta la caída inicial por continuidad de la señal, y si
   un máximo local no cruza `clarityThreshold` no se rinde ahí — sigue buscando el siguiente,
@@ -76,13 +80,29 @@ MiSiSolTests/
   calibrado con grabaciones reales), prefiere esa octava y repite mientras siga mejorando. El
   margen es necesario porque cualquier señal periódica también correlaciona bien en el doble de su
   propio periodo; sin margen, la corrección revertía fundamentales ya bien detectadas.
+- **Diezmado previo** (`usesDecimation`, activado por defecto): antes de la ACF, filtra
+  (paso-bajo, sinc + ventana de Hamming) y diezma la señal con `vDSP_desamp`.
+  `decimationFactor(for:maxFrequency:)` calcula el mayor factor entero tal que la frecuencia de
+  muestreo resultante siga siendo ≥10× `maxFrequency` (a 48kHz con `maxFrequency=1200Hz`, factor 4,
+  hasta 12kHz). Reduce el coste de la ACF ~factor² sin perder precisión (verificado contra el
+  corpus de grabaciones reales, ver Tests). Si el buffer es demasiado corto para el filtro, sigue
+  sin diezmar en vez de fallar.
 - La correlación se normaliza por la energía de cada segmento solapado (no por el número de
-  muestras), para no sesgar el resultado por el efecto de la ventana de Hann sobre lags grandes.
+  muestras), para no sesgar el resultado a favor de lags grandes si los dos segmentos tuvieran
+  energía distinta (p.ej. una señal con envolvente de ataque/decaimiento).
+- Los productos internos de la correlación (cruzada y las dos autocorrelaciones de energía) se
+  calculan con `vDSP_dotpr` (Accelerate), no con un bucle Swift escalar: rendimiento independiente
+  del nivel de optimización del build, a diferencia de un bucle propio (mucho más lento en Debug
+  sin optimizar).
+- **Sin ventana de Hann**: se aplicaba antes de correlar, pero analizando el corpus de grabaciones
+  reales quitarla no empeoró ninguna cuerda — la mejoró en la mayoría (más buffers cruzando el
+  umbral de claridad, precisión en cents prácticamente igual). Tiene sentido: Hann es una técnica
+  pensada para FFT (reduce fugas espectrales entre bins), no para ACF en dominio temporal, donde
+  solo recortaba energía útil de los extremos del buffer.
 - **Cálculo perezoso**: las correlaciones se calculan bajo demanda y se cachean por lag, en vez de
   precalcular todo el rango `[minLag, maxLag]` de antemano. La mayoría de sonidos reales tienen su
   periodo fundamental mucho antes de `maxLag`; precalcular todo el rango desperdiciaba trabajo en
-  el caso común y, en una build de Debug sin optimizar, podía tardar más que la duración de un
-  buffer de audio.
+  el caso común.
 - Interpolación parabólica sobre el pico (ya corregido de octava si aplica) para una estimación de
   frecuencia sub-muestra.
 - Rango por defecto: 30–1200Hz (cubre desde el Mi grave del bajo transportado varios semitonos
@@ -92,6 +112,15 @@ MiSiSolTests/
 - `detectPitchWithDiagnostics(in:sampleRate:)`: además de la frecuencia, devuelve la claridad real
   conseguida (`DetectionResult.clarity`), aunque no llegue a superar el umbral — para poder mostrar
   en pantalla (en builds DEBUG) por qué una señal real se está quedando corta, sin adivinarlo.
+
+### PitchAnalysisGate.swift
+- Descarta buffers mientras el análisis del anterior sigue en curso, en vez de encolarlos: si la
+  ACF tarda más que la duración de un buffer (~85ms, sobre todo en Debug sin optimizar antes de
+  usar vDSP), la cola de análisis acumulaba retraso sin límite y la UI acababa mostrando una
+  lectura de hace segundos.
+- `tryEnter()`/`leave()` con `OSAllocatedUnfairLock.withLockIfAvailable` (intento de bloqueo que
+  nunca espera): seguro de llamar desde el hilo real-time de captura, donde bloquear aunque sea
+  brevemente puede hacer que se pierdan buffers de verdad.
 
 ### ToneGenerator.swift
 - `ToneGenerator.generateSamples(...)`: función estática pura que genera una onda senoidal,
@@ -105,9 +134,12 @@ MiSiSolTests/
   no uno fijo a 44.1kHz: el simulador siempre usa 44.1kHz, pero muchos dispositivos reales operan
   a otro sample rate o lo cambian según la ruta de audio activa, y ese desajuste causaba fallos de
   arranque intermitentes en dispositivo real.
-- Configura su propia `AVAudioSession` (`.playAndRecord`, modo `.default`, igual que `AudioEngine`)
-  de forma idempotente al arrancar el engine, para que reproducir una nota funcione aunque la
-  captura de micrófono no se haya llegado a arrancar todavía.
+- Configura su propia `AVAudioSession` (`.playback`, modo `.default`) en cada `play()`, para que
+  reproducir una nota funcione aunque la captura de micrófono no se haya llegado a arrancar
+  todavía. `.playback` (no `.playAndRecord`): no necesita capturar nada mientras suena la
+  referencia, y así no compite con la categoría `.record` que usa `AudioEngine` al escuchar (solo
+  una puede estar activa a la vez; ver el momento delicado documentado en
+  `TunerViewModel.stopReferenceNote()`).
 - El estado de fase/amplitud se aísla en una clase `nonisolated` aparte (`TonePhaseState`) para
   que el closure de render de audio, que corre en el hilo real-time, no dependa del aislamiento a
   `@MainActor` por defecto del módulo (ver "Notas de concurrencia" más abajo).
@@ -116,13 +148,27 @@ MiSiSolTests/
 - `AVAudioEngine` con tap en el input node, buffer configurable (4096 muestras por defecto, ~93ms
   a 44.1kHz o ~85ms a los 48kHz reales de la mayoría de dispositivos — más del doble del periodo
   del Mi grave del bajo transportado, y latencia razonable).
-- Sesión configurada como `.playAndRecord`, modo **`.default`** (no `.measurement`: se probó y se
-  revirtió, ver "Historial de depuración" más abajo). `.default` aplica control automático de
-  ganancia de entrada, que da una señal más fuerte sin tocar el móvil pegado al instrumento; el
-  procesado de voz que también aplica (pensado para llamadas) es el coste a cambio.
+- Sesión configurada como **`.record`, modo `.measurement`**, sin `.allowBluetooth` (ver
+  "Historial de depuración" más abajo para el porqué del cambio desde `.playAndRecord`/`.default`).
+  Sube la ganancia de entrada al máximo con `setInputGain(1.0)` si `isInputGainSettable`, para
+  compensar la falta de AGC de `.measurement`.
 - Expone los buffers vía closure (`onBuffer: ([Float], Double) -> Void`), invocado en el hilo
-  real-time de captura; quien lo use es responsable de saltar a `@MainActor` para tocar UI.
+  real-time de captura; quien lo use es responsable de saltar a `@MainActor` para tocar UI. El
+  closure se recuerda internamente (no solo se pasa a `start`), para poder reinstalar el tap sin
+  que quien llama tenga que invocar `start` de nuevo (ver el punto siguiente).
 - Maneja start/stop y expone el permiso de micrófono (`AVAudioApplication`, API de iOS 17+).
+- **Resiliencia a interrupciones y cambios de ruta**: observa
+  `AVAudioSession.interruptionNotification` (reanuda al terminar si estaba escuchando y el sistema
+  lo permite, respetando `.shouldResume`), `.routeChangeNotification` (reinstala el tap si el
+  motivo es un cambio real de hardware — auriculares conectados/desconectados... — no el de
+  categoría que dispara la propia `AudioEngine` al configurar la sesión) y
+  `.AVAudioEngineConfigurationChange` (acotada al propio `engine`, para no reaccionar a la del
+  `AVAudioEngine` interno de `ToneGenerator`). Los tres observers llegan en un hilo arbitrario y se
+  despachan al principal antes de tocar estado, para serializarlos con `start()`/`stop()` (que en
+  esta app siempre se llaman desde el hilo principal) sin necesitar un lock nuevo.
+- `onRestartError: ((Error) -> Void)?`: se invoca si un reintento automático (tras interrupción o
+  cambio de ruta) falla, para que ese fallo no quede en silencio igual que el de un `start()`
+  inicial fallido.
 - **Grabación de depuración (solo DEBUG)**: `startDebugRecording(to:)` / `stopDebugRecording()`
   escriben en paralelo, a un `.wav`, el mismo audio crudo que recibe `PitchDetector` (antes de
   cualquier suavizado). Pensado para capturar un caso real que falla y analizarlo fuera del
@@ -146,6 +192,9 @@ MiSiSolTests/
   suavizado, y la siguiente detección buena parecía "aparecer de la nada".
 - `lastClarity`: claridad (0...1) de la última lectura vía `detectPitchWithDiagnostics`, expuesta
   para mostrarla en pantalla en builds DEBUG.
+- `audioErrorMessage: String?`: mensaje si la captura no pudo arrancar (o un reintento automático
+  de `AudioEngine` falló), para que `TunerView` avise con opción de reintentar en vez de dejar la
+  app "muda" sin explicación. Se limpia al arrancar con éxito.
 - La afinación activa se persiste por instrumento entre sesiones vía `TuningStore` (envuelve
   `UserDefaults`, codificando `Tuning` como JSON); se recupera al elegir instrumento y se guarda
   cada vez que se cambia de afinación (preset, transposición o custom).
@@ -154,10 +203,15 @@ MiSiSolTests/
 - El pitch se calcula en una cola serial en background (`pitchQueue`), no en el hilo real-time de
   captura de audio: la autocorrelación es demasiado costosa para ese hilo (bloquearlo acumula
   retraso o pierde buffers). Serial (no la cola global concurrente) para que los buffers no se
-  procesen fuera de orden.
+  procesen fuera de orden. Antes de encolar, `PitchAnalysisGate.tryEnter()` descarta el buffer
+  (sin tocar `pitchQueue`) si el análisis del anterior sigue en curso.
 - `playReferenceNote()` / `stopReferenceNote()`: paran la escucha del micrófono mientras suena la
   nota de referencia y la reanudan al terminar (solo si estaba activa antes), para no confundir
-  el tono reproducido con la señal capturada.
+  el tono reproducido con la señal capturada. `stopReferenceNote()` espera
+  `ToneGenerator.rampDuration` (el fundido de salida) antes de llamar a `startListening()`: como
+  `AudioEngine` y `ToneGenerator` ya usan categorías de sesión distintas (`.record` vs.
+  `.playback`), reclamar la sesión mientras el fundido de `ToneGenerator` todavía suena es el
+  momento más delicado de la transición entre ambas.
 
 ### TunerView.swift / TunerTheme.swift
 - Tema oscuro cálido **fijo** (no se adapta al modo claro/oscuro del sistema, como muchas apps de
@@ -172,6 +226,9 @@ MiSiSolTests/
   los lados. Ambos con zona verde para el margen de "afinado", coloreados según el estado.
 - En builds DEBUG: claridad de la última lectura en pantalla, y un botón para grabar/compartir el
   audio crudo del micrófono a un `.wav` (ver `AudioEngine`).
+- Aviso discreto (con botón "Reintentar") cuando `viewModel.audioErrorMessage` no es `nil`, justo
+  debajo del header: el usuario nunca debería ver un afinador que simplemente no detecta nada sin
+  ninguna explicación.
 - Toggle Manual/Automático como píldora de dos segmentos con estilo propio.
 - Botón de reproducir nota de referencia como cápsula acentuada, con icono play/stop según el
   estado (`isPlayingReferenceNote`).
@@ -203,7 +260,16 @@ necesarios para tocar estado observable se hacen a mano donde corresponde (`Task
 - **TuningTests**: transposición de afinación estándar (frecuencias resultantes), afinación custom,
   afinaciones alternativas.
 - **PitchDetectorTests**: señales sintéticas a frecuencias conocidas (82.41Hz, 110Hz, 440Hz,
-  41.20Hz, 36.7Hz transportada), silencio y ruido blanco (esperan `nil`), buffer demasiado corto.
+  41.20Hz, 36.7Hz transportada), silencio y ruido blanco (esperan `nil`), buffer demasiado corto,
+  el error de octava con fundamental débil + 2º armónico dominante, `decimationFactor` (caso de
+  referencia 48kHz→4), y que diezmar no cambie la frecuencia detectada frente a no diezmar.
+- **PitchAnalysisGateTests**: `tryEnter()`/`leave()` básico, y un escenario con semáforos que
+  simula un análisis lento mientras llegan varios buffers más (los intermedios se descartan; tras
+  liberarse, el siguiente sí se procesa) — determinista, sin sleeps.
+- **PitchDetectionCorpusTests**: corre el corpus de 14 grabaciones reales (`MiSiSolTests/Fixtures/`)
+  a través de `PitchDetector` + la mediana móvil de `TunerViewModel`, comparando contra la nota
+  esperada de `manifest.json` dentro de su tolerancia. Se salta con `XCTSkip` si el corpus no está
+  presente.
 - **ToneGeneratorTests**: periodicidad de los samples generados (cruces por cero, frecuencia
   dominante vía Goertzel), amplitud dentro de rango, y transición de estado play/stop real
   (arranca el engine de verdad en el simulador).
@@ -253,40 +319,94 @@ posteriori):
    simplemente no estaban afinadas con precisión al grabar, no un bug de detección.
 
 **Estado tras el punto 5, según el usuario probando en dispositivo real: "está igual".** El fix del
-error de octava está verificado (con script en Python que replica el algoritmo) contra las 14
-grabaciones sin regresiones, pero la sensación de uso real no ha mejorado perceptiblemente. No está
-confirmado si eso significa que persiste el mismo problema (quizás el build probado no incluía aún
-el fix), si hay otro problema no capturado en las grabaciones analizadas, o si el problema real es
-de una naturaleza que el enfoque actual (ACF por buffer, con validaciones a posteriori) no puede
-resolver con más parches puntuales.
+error de octava estaba verificado (con script en Python que replica el algoritmo) contra las 14
+grabaciones sin regresiones, pero la sensación de uso real no había mejorado perceptiblemente.
 
-## Estado actual y preguntas abiertas para revisión de arquitectura
+6. **Revisión de arquitectura (Fable) y corrección estructural.** Con la lógica de `PitchDetector`
+   ya validada contra grabaciones reales, una revisión de arquitectura señaló que el síntoma
+   ("no detecta nada en dispositivo real") probablemente no estaba en el algoritmo de pitch en sí,
+   sino alrededor: falta de backpressure en el procesado (una ACF lenta en Debug sin optimizar
+   podía acumular retraso sin límite), coste de la ACF, configuración de la sesión de audio, y
+   ausencia total de manejo de interrupciones/cambios de ruta. Se abordaron los cuatro a la vez,
+   sin tocar el algoritmo de detección (ACF + `correctOctave` + interpolación parabólica):
+   - **Backpressure** (`PitchAnalysisGate`): descarta buffers mientras el análisis del anterior
+     sigue en curso, en vez de dejar que `pitchQueue` acumule retraso sin límite.
+   - **Rendimiento de la ACF**: `vDSP_dotpr` (Accelerate) en vez de bucles Swift escalares
+     (rendimiento independiente del nivel de optimización del build), diezmado previo con
+     `vDSP_desamp` (reduce el coste ~factor², factor 4 a 48kHz), y se quitó la ventana de Hann
+     (analizando el corpus, no aportaba nada a una ACF en dominio temporal — ver `PitchDetector.swift`).
+   - **Sesión de audio dedicada**: `.record`/`.measurement` (no `.playAndRecord`/`.default`) al
+     escuchar, sin `.allowBluetooth`, con `setInputGain` al máximo para compensar la falta de AGC.
+     La prueba anterior de `.measurement` (punto 3) se hizo sin el diezmado ni el backpressure de
+     esta ronda, así que probablemente estaba contaminada por el atasco de la cola de análisis, no
+     por la ausencia de AGC en sí.
+   - **Robustez de sesión**: `AudioEngine` ahora reacciona a interrupciones (llamadas, Siri) y
+     cambios de ruta (auriculares conectados/desconectados), reanudando o reinstalando el tap en
+     vez de quedarse "sordo" hasta reabrir la app; los fallos de arranque (antes con `try?`
+     silencioso) se muestran en `TunerView` con opción de reintentar.
+   - **Corpus de grabaciones en CI** (`PitchDetectionCorpusTests`): la validación manual con script
+     en Python de los puntos 1 y 5 pasa a ser un test XCTest reproducible contra las mismas 14
+     grabaciones, para que futuros cambios en el pipeline de audio se verifiquen automáticamente en
+     vez de a mano.
 
-El patrón de esta depuración ha sido: probar en dispositivo → encontrar un síntoma nuevo → analizar
-(matemáticamente o con grabaciones reales) → añadir una corrección puntual al mismo pipeline ACF
-(threshold, corrección de octava, tolerancia a fallos, sesión de audio...). Cada corrección ha
-sido válida y verificada para el caso que la motivó, pero el usuario no percibe mejora global, lo
-que sugiere que quizás el problema no es una serie de bugs puntuales sino algo más estructural del
-enfoque. Preguntas concretas para quien revise la arquitectura:
+   Cada pieza se verificó de la forma más rigurosa posible sin acceso a Xcode/dispositivo real
+   desde este entorno: la lógica de diezmado/sin-Hann se validó replicando el algoritmo exacto en
+   Python contra las 14 grabaciones (sin regresiones, varias cuerdas mejoran en claridad), y los
+   tests nuevos (`PitchAnalysisGateTests`, ampliaciones de `PitchDetectorTests`,
+   `PitchDetectionCorpusTests`) se diseñaron para poder razonar sobre su corrección leyendo el
+   código, pero **no se ha podido compilar el proyecto ni ejecutar `xcodebuild test` ni probar en
+   un dispositivo real** en esta ronda de cambios. La resiliencia a interrupciones/cambios de ruta
+   y el aviso de error en `TunerView`, en particular, solo se han podido verificar por lectura de
+   código: son exactamente el tipo de comportamiento que requiere probarse en un dispositivo real
+   (provocar una llamada entrante, conectar/desconectar auriculares, etc.) antes de darlos por
+   buenos.
 
-- **¿Es la autocorrelación por buffer independiente el enfoque correcto?** Cada buffer de ~4096
-  muestras se analiza de forma aislada; el único estado entre buffers vive en `TunerViewModel`
-  (mediana de 5 lecturas, histéresis). ¿Compensaría más usar información entre buffers dentro del
-  propio detector (p.ej. ventanas solapadas, seguimiento de fase, o un método como YIN/HPS/cepstrum
-  en vez de ACF pura), en lugar de seguir ajustando umbrales y correcciones sobre ACF?
-- **¿El tamaño de buffer (4096 muestras, ~85-93ms) y la falta de solape entre buffers consecutivos
-  son limitantes?** Para notas graves (bajo) el periodo ocupa una fracción grande del buffer;
-  ¿ventanas más largas y solapadas (con más coste de CPU/latencia) darían estimaciones más estables?
-- **¿La sesión de audio (`.default` con AGC) es la mejor opción disponible, o hay un punto intermedio
-  no probado** (p.ej. `.measurement` + ganancia de entrada manual, o normalización de nivel en
-  software antes de la autocorrelación) que combine señal fuerte sin el procesado de voz?
+## Estado actual y preguntas abiertas
+
+El patrón de esta depuración fue, durante un tiempo: probar en dispositivo → encontrar un síntoma
+nuevo → analizar → añadir una corrección puntual al pipeline ACF. La revisión de arquitectura del
+punto 6 cambió de nivel: en vez de seguir parcheando la detección, atacó el pipeline de captura y
+procesado alrededor de ella. Preguntas que quedaban abiertas en la revisión anterior y cómo quedan
+tras el punto 6:
+
+- ~~¿La sesión de audio es la mejor opción disponible?~~ **Resuelto** (a falta de confirmación en
+  dispositivo real): `.record`/`.measurement` + `setInputGain`, ver punto 6.
+- ~~¿Tiene sentido seguir calibrando constantes a mano, o hace falta un corpus en CI?~~
+  **Resuelto**: `PitchDetectionCorpusTests` corre las 14 grabaciones en cada test run.
+- **¿El tamaño de buffer (4096 muestras) y la falta de solape entre buffers son limitantes?**
+  Parcialmente abordado: el diezmado reduce el coste de procesar ese buffer, pero no cambia su
+  duración (~85-93ms) ni introduce solape entre buffers consecutivos. Sigue abierto si eso importa
+  en la práctica.
+- **¿Es la autocorrelación en sí (frente a YIN/HPS/cepstrum) el enfoque correcto?** Sigue
+  completamente abierto — explícitamente fuera de alcance en la ronda de cambios del punto 6, que
+  se centró en el pipeline alrededor del algoritmo, no en el algoritmo.
 - **¿Los transitorios de ataque (rasgueo/pulsación) necesitan un tratamiento explícito** (ignorar
-  los primeros ~100-200ms de una nota nueva, detectar el ataque y descartarlo) en vez de confiar en
-  que el umbral de claridad y la tolerancia a fallos los absorban?
-- **¿Tiene sentido seguir calibrando constantes (`clarityThreshold`, `octaveCorrectionMargin`,
-  tamaño de buffer...) a mano contra grabaciones puntuales,** o el proyecto necesitaría un paso de
-  calibración/test más sistemático (un corpus de grabaciones de referencia con nota esperada
-  conocida, corrido automáticamente en CI) para no depender de "probar y ver qué tal"?
+  los primeros ~100-200ms de una nota nueva)? Sigue abierto; no se ha tocado.
+- **La pregunta más importante sigue sin respuesta: ¿esto arregla lo que el usuario percibe en
+  dispositivo real?** Todo lo del punto 6 está razonado y verificado hasta donde es posible sin
+  Xcode ni dispositivo desde este entorno, pero ninguna cantidad de análisis fuera del dispositivo
+  sustituye a probarlo ahí. Ver la sección de verificación final más abajo.
 - Aparte de pitch: no hay UI para editar/eliminar afinaciones personalizadas ya guardadas (solo
   crearlas); la persistencia (`TuningStore`) guarda la última afinación por instrumento, pero no
   hay gestión de varias afinaciones custom guardadas.
+
+## Verificación pendiente en dispositivo real
+
+Los cambios del punto 6 del historial se han escrito y razonado con cuidado, pero desde este
+entorno no hay Xcode, simulador, ni dispositivo real disponible: no se ha podido compilar el
+proyecto ni ejecutar `xcodebuild test`. Antes de dar la ronda por buena, falta comprobar en
+dispositivo real (o en el simulador, para lo que no dependa de hardware real):
+
+1. `xcodebuild test` en verde, incluido el corpus (`PitchDetectionCorpusTests`, que ahora sí
+   debería ejecutarse de verdad, no saltarse, porque los `.wav` están en el repo).
+2. En Release (o Debug con `-O`): con la app recién abierta en silencio, la claridad debe
+   actualizarse fluida, sin congelarse ni ir con retraso; al tocar una cuerda, la nota debe
+   aparecer en menos de ~medio segundo.
+3. Con AirPods u otros auriculares Bluetooth emparejados: la captura debe seguir usando el
+   micrófono del propio iPhone, no el del auricular.
+4. La secuencia escuchar → reproducir nota de referencia → parar → seguir afinando (el momento
+   delicado documentado en `TunerViewModel.stopReferenceNote()`).
+5. Provocar una interrupción real (llamada entrante o Siri) y comprobar que la escucha se reanuda
+   sola al terminar.
+6. Conectar/desconectar unos auriculares mientras se escucha, y comprobar que la captura se
+   reinstala con el hardware nuevo en vez de quedarse con el formato antiguo.
