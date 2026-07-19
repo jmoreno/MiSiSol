@@ -86,6 +86,11 @@ nonisolated final class TunerViewModel {
     /// justo por debajo de `PitchDetector.clarityThreshold` o muy lejos de él.
     var lastClarity: Float = 0
 
+    #if DEBUG
+    private(set) var isDebugRecording = false
+    private(set) var debugRecordingURL: URL?
+    #endif
+
     private var recentFrequencies: [Float] = []
     private var wasListeningBeforeReferenceNote = false
 
@@ -177,6 +182,30 @@ nonisolated final class TunerViewModel {
     func stopListening() {
         audioEngine.stop()
     }
+
+    #if DEBUG
+    /// Graba el audio crudo del micrófono (el mismo que recibe `PitchDetector`, antes de
+    /// suavizado) a un .wav en el directorio temporal, para poder compartirlo y depurar un caso
+    /// real que falla. Requiere que la escucha ya esté activa.
+    func startDebugRecording() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("misisol-debug-\(Int(Date().timeIntervalSince1970))")
+            .appendingPathExtension("wav")
+        do {
+            try audioEngine.startDebugRecording(to: url)
+            debugRecordingURL = url
+            isDebugRecording = true
+        } catch {
+            debugRecordingURL = nil
+            isDebugRecording = false
+        }
+    }
+
+    func stopDebugRecording() {
+        audioEngine.stopDebugRecording()
+        isDebugRecording = false
+    }
+    #endif
 
     // MARK: - Procesado de pitch
 

@@ -50,9 +50,7 @@ struct TunerView: View {
                 detectedNoteDisplay
 
                 #if DEBUG
-                Text(String(format: "claridad: %.2f", viewModel.lastClarity))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(TunerTheme.textSecondary)
+                debugDiagnostics
                 #endif
 
                 Spacer(minLength: 0)
@@ -100,6 +98,42 @@ struct TunerView: View {
             }
         }
     }
+
+    #if DEBUG
+    /// Claridad de la última lectura y un botón para grabar el audio crudo del micrófono a un
+    /// .wav compartible (AirDrop/Mensajes/Archivos), para depurar un caso real sin tener que
+    /// describirlo de palabra.
+    private var debugDiagnostics: some View {
+        VStack(spacing: 6) {
+            Text(String(format: "claridad: %.2f", viewModel.lastClarity))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(TunerTheme.textSecondary)
+
+            HStack(spacing: 8) {
+                Button {
+                    if viewModel.isDebugRecording {
+                        viewModel.stopDebugRecording()
+                    } else {
+                        viewModel.startDebugRecording()
+                    }
+                } label: {
+                    Text(viewModel.isDebugRecording ? "Detener grabación debug" : "Grabar audio debug")
+                        .font(.system(size: 11, design: .monospaced))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(TunerTheme.accent)
+
+                if !viewModel.isDebugRecording, let url = viewModel.debugRecordingURL {
+                    ShareLink(item: url) {
+                        Text("Compartir .wav")
+                            .font(.system(size: 11, design: .monospaced))
+                    }
+                    .foregroundStyle(TunerTheme.accent)
+                }
+            }
+        }
+    }
+    #endif
 
     private var modePicker: some View {
         HStack(spacing: 4) {

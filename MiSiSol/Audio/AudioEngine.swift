@@ -21,6 +21,14 @@ nonisolated final class AudioEngine {
 
     private(set) var isRunning = false
 
+    #if DEBUG
+    /// Archivo abierto mientras `startDebugRecording(to:)` está activo. Solo para diagnóstico:
+    /// permite capturar exactamente el mismo audio crudo que le llega a `PitchDetector` (antes de
+    /// cualquier suavizado o lógica de afinación) y compartirlo para analizarlo fuera del dispositivo,
+    /// en vez de intentar adivinar por qué una señal real falla sin poder escucharla.
+    private var debugRecordingFile: AVAudioFile?
+    #endif
+
     init(bufferSize: AVAudioFrameCount = 4096) {
         self.bufferSize = bufferSize
     }
@@ -60,7 +68,12 @@ nonisolated final class AudioEngine {
         let inputNode = engine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
 
-        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: format) { buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: format) { [weak self] buffer, _ in
+            #if DEBUG
+            if let file = self?.debugRecordingFile {
+                try? file.write(from: buffer)
+            }
+            #endif
             guard let channelData = buffer.floatChannelData else { return }
             let frameLength = Int(buffer.frameLength)
             let samples = Array(UnsafeBufferPointer(start: channelData[0], count: frameLength))
@@ -79,4 +92,21 @@ nonisolated final class AudioEngine {
         engine.stop()
         isRunning = false
     }
+
+    #if DEBUG
+    /// Empieza a grabar en paralelo el audio crudo del tap (el mismo `[Float]` que recibe
+    /// `PitchDetector`, antes de cualquier suavizado) a un .wav, para poder compartirlo y analizar
+    /// un caso real que falla sin depender de describirlo de palabra. Solo tiene efecto mientras
+    /// la captura ya está activa (`start(onBuffer:)`); si se llama antes, no hay tap que grabar.
+    func startDebugRecording(to url: URL) throws {
+        let format = engine.inputNode.outputFormat(forBus: 0)
+        debugRecordingFile = try AVAudioFile(forWriting: url, settings: format.settings)
+    }
+
+    /// Cierra el archivo de grabación de depuración. Seguro de llamar aunque no hubiera ninguna
+    /// grabación en curso.
+    func stopDebugRecording() {
+        debugRecordingFile = nil
+    }
+    #endif
 }
