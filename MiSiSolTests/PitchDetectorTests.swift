@@ -98,6 +98,21 @@ final class PitchDetectorTests: XCTestCase {
         }
     }
 
+    /// Reproduce el error de octava confirmado con grabaciones reales: el Sol grave de una
+    /// guitarra (G3, ~196.00Hz) se detectaba como el Sol una octava por encima (~392Hz) porque su
+    /// segundo armónico, mucho más fuerte que la fundamental, cruzaba el umbral de claridad
+    /// primero (a mitad de periodo) con una correlación alta, y el detector se quedaba ahí sin
+    /// comprobar que el periodo real (el doble de ese lag) tenía una correlación todavía más alta.
+    /// El mismo patrón apareció también en el Re grave de un bajo (D2 detectado como D3) en las
+    /// mismas grabaciones.
+    func testCorrectsOctaveErrorWhenSecondHarmonicDominatesFundamental() {
+        let buffer = sineWaveWithHarmonic(frequency: 196.00, harmonic: 2, harmonicAmplitude: 1.0, amplitude: 0.2)
+        let detected = detector.detectPitch(in: buffer, sampleRate: sampleRate)
+        XCTAssertNotNil(detected, "No se detectó ninguna frecuencia con fundamental débil + 2º armónico dominante")
+        guard let detected else { return }
+        XCTAssertEqual(detected, 196.00, accuracy: 196.00 * 0.01, "Se detectó \(detected)Hz: probablemente enganchado al 2º armónico (~392Hz) en vez de a la fundamental")
+    }
+
     func testBufferTooShortForConfiguredRangeReturnsNil() {
         let tinyBuffer = sineWave(frequency: 440.0, duration: 0.001)
         XCTAssertNil(detector.detectPitch(in: tinyBuffer, sampleRate: sampleRate))

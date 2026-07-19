@@ -26,6 +26,13 @@ struct PitchDetector {
         self.clarityThreshold = clarityThreshold
     }
 
+    /// Margen mínimo por el que la correlación al doble de un lag candidato debe superarlo para
+    /// preferir esa octava más grave (ver `correctOctave`). Calibrado analizando grabaciones reales
+    /// de guitarra, bajo y ukelele: separa con buena fiabilidad los errores de octava genuinos
+    /// (margen típicamente > 0.15) de las fundamentales ya correctas (margen típicamente < 0, la
+    /// mayoría de las veces claramente negativo).
+    private static let octaveCorrectionMargin: Float = 0.05
+
     /// Tamaño mínimo de buffer recomendado para detectar de forma fiable `minFrequency` Hz
     /// a un `sampleRate` dado.
     ///
@@ -85,10 +92,12 @@ struct PitchDetector {
             return DetectionResult(frequency: nil, clarity: peak.value)
         }
 
-        let refinedLag = parabolicRefinement(around: peak.lag, minLag: minLag, maxLag: maxLag, correlation: correlation)
-        guard refinedLag > 0 else { return DetectionResult(frequency: nil, clarity: peak.value) }
+        let corrected = correctOctave(lag: peak.lag, value: peak.value, maxLag: maxLag, correlation: correlation)
 
-        return DetectionResult(frequency: Float(sampleRate) / refinedLag, clarity: peak.value)
+        let refinedLag = parabolicRefinement(around: corrected.lag, minLag: minLag, maxLag: maxLag, correlation: correlation)
+        guard refinedLag > 0 else { return DetectionResult(frequency: nil, clarity: corrected.value) }
+
+        return DetectionResult(frequency: Float(sampleRate) / refinedLag, clarity: corrected.value)
     }
 
     // MARK: - Búsqueda de pico
@@ -141,6 +150,33 @@ struct PitchDetector {
             lag = peakLag // este máximo no basta: seguir buscando más allá
         }
         return best
+    }
+
+    /// Si la correlación al doble de `lag` es notablemente mayor que la del propio `lag`, el
+    /// periodo real es más probablemente el doble (la mitad de la frecuencia) y `lag` no es más
+    /// que su segundo armónico. Repite la comprobación (el doble del doble...) mientras seguir
+    /// bajando de octava siga mejorando claramente la correlación.
+    ///
+    /// No basta con "igual o mayor": cualquier señal genuinamente periódica de periodo T también
+    /// correlaciona fuerte en 2T (dos periodos completos encajan igual de bien que uno), así que
+    /// una fundamental ya bien detectada casi siempre tiene una correlación en 2T parecida o algo
+    /// menor, nunca claramente mayor. Analizando grabaciones reales de guitarra/bajo/ukelele
+    /// (incluido el caso que motivó esto: la cuerda Sol de una guitarra detectada una octava por
+    /// encima de la real, con correlación en 2T sistemáticamente más alta que en T) se confirma
+    /// que un margen claro y positivo sí distingue de forma fiable un error de octava genuino de
+    /// una fundamental correcta; ver `octaveCorrectionMargin`.
+    private func correctOctave(lag: Int, value: Float, maxLag: Int, correlation: (Int) -> Float) -> (lag: Int, value: Float) {
+        var lag = lag
+        var value = value
+        while true {
+            let doubledLag = lag * 2
+            guard doubledLag <= maxLag else { break }
+            let doubledValue = correlation(doubledLag)
+            guard doubledValue > value + Self.octaveCorrectionMargin else { break }
+            lag = doubledLag
+            value = doubledValue
+        }
+        return (lag, value)
     }
 
     // MARK: - Ventana de Hann
