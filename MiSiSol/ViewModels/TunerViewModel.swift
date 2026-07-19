@@ -55,6 +55,9 @@ nonisolated final class TunerViewModel {
     /// Es serial (no la cola global concurrente) para que los buffers se procesen en el mismo
     /// orden en que llegan y no se solape el análisis de dos buffers a la vez.
     private let pitchQueue = DispatchQueue(label: "com.zinkinapps.misisol.pitch", qos: .userInitiated)
+    /// Descarta buffers mientras el análisis del anterior sigue en curso, en vez de acumularlos
+    /// en `pitchQueue` (ver `PitchAnalysisGate`).
+    private let pitchAnalysisGate = PitchAnalysisGate()
 
     /// Margen de cents dentro del cual se considera "afinado".
     let inTuneCentsMargin: Double
@@ -168,8 +171,14 @@ nonisolated final class TunerViewModel {
         // demasiado costoso para ese hilo (si tarda más que la duración de un buffer, se acumula
         // retraso o se pierden buffers). Por eso el cálculo se manda a una cola en background, y
         // solo el salto final a @MainActor toca el hilo principal para actualizar la UI.
-        try? audioEngine.start { [pitchDetector, pitchQueue, weak self] samples, sampleRate in
+        //
+        // `pitchAnalysisGate.tryEnter()` descarta este buffer sin encolarlo si el análisis del
+        // anterior sigue en curso: así la cola nunca acumula retraso, a costa de perder alguna
+        // lectura intermedia (que es justo lo que queremos en un afinador en tiempo real).
+        try? audioEngine.start { [pitchDetector, pitchQueue, pitchAnalysisGate, weak self] samples, sampleRate in
+            guard pitchAnalysisGate.tryEnter() else { return }
             pitchQueue.async {
+                defer { pitchAnalysisGate.leave() }
                 let result = pitchDetector.detectPitchWithDiagnostics(in: samples, sampleRate: sampleRate)
                 Task { @MainActor in
                     self?.lastClarity = result.clarity
