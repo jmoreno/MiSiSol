@@ -21,6 +21,10 @@ struct TunerView: View {
             VStack(spacing: 20) {
                 header
 
+                if let message = viewModel.audioErrorMessage {
+                    audioErrorBanner(message: message)
+                }
+
                 InstrumentPicker(selected: viewModel.instrument) { newInstrument in
                     viewModel.selectInstrument(newInstrument)
                 }
@@ -97,6 +101,29 @@ struct TunerView: View {
                     .clipShape(Circle())
             }
         }
+    }
+
+    /// Aviso discreto cuando la captura de audio no ha podido arrancar (o un reintento automático
+    /// tras una interrupción/cambio de ruta ha fallado), con opción de reintentar. El usuario
+    /// nunca debería ver un afinador que simplemente no detecta nada sin ninguna explicación.
+    private func audioErrorBanner(message: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(TunerTheme.warning)
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundStyle(TunerTheme.textPrimary)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button("Reintentar") {
+                viewModel.startListening()
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(TunerTheme.accent)
+        }
+        .padding(10)
+        .background(TunerTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     #if DEBUG

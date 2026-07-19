@@ -88,6 +88,10 @@ nonisolated final class TunerViewModel {
     /// depuración en pantalla (ver TunerView): ayuda a saber si una señal real se está quedando
     /// justo por debajo de `PitchDetector.clarityThreshold` o muy lejos de él.
     var lastClarity: Float = 0
+    /// Mensaje si la captura de audio no pudo arrancar (o un reintento automático tras una
+    /// interrupción/cambio de ruta falló). `nil` mientras todo va bien. TunerView lo usa para
+    /// mostrar un aviso con opción de reintentar en vez de dejar la app "muda" sin explicación.
+    var audioErrorMessage: String?
 
     #if DEBUG
     private(set) var isDebugRecording = false
@@ -124,6 +128,13 @@ nonisolated final class TunerViewModel {
         self.inTuneCentsMargin = inTuneCentsMargin
         self.smoothingWindowSize = smoothingWindowSize
         self.maxConsecutiveMissedReadings = maxConsecutiveMissedReadings
+
+        // Cubre los reintentos automáticos de captura que AudioEngine hace por su cuenta (tras
+        // una interrupción o un cambio de ruta): si fallan, no deben quedar en silencio, sino
+        // avisar igual que un fallo al arrancar por primera vez (ver `startListening`).
+        audioEngine.onRestartError = { [weak self] error in
+            self?.audioErrorMessage = error.localizedDescription
+        }
     }
 
     /// Nota objetivo de la cuerda actualmente seleccionada.
@@ -175,16 +186,25 @@ nonisolated final class TunerViewModel {
         // `pitchAnalysisGate.tryEnter()` descarta este buffer sin encolarlo si el análisis del
         // anterior sigue en curso: así la cola nunca acumula retraso, a costa de perder alguna
         // lectura intermedia (que es justo lo que queremos en un afinador en tiempo real).
-        try? audioEngine.start { [pitchDetector, pitchQueue, pitchAnalysisGate, weak self] samples, sampleRate in
-            guard pitchAnalysisGate.tryEnter() else { return }
-            pitchQueue.async {
-                defer { pitchAnalysisGate.leave() }
-                let result = pitchDetector.detectPitchWithDiagnostics(in: samples, sampleRate: sampleRate)
-                Task { @MainActor in
-                    self?.lastClarity = result.clarity
-                    self?.processPitch(result.frequency)
+        do {
+            try audioEngine.start { [pitchDetector, pitchQueue, pitchAnalysisGate, weak self] samples, sampleRate in
+                guard pitchAnalysisGate.tryEnter() else { return }
+                pitchQueue.async {
+                    defer { pitchAnalysisGate.leave() }
+                    let result = pitchDetector.detectPitchWithDiagnostics(in: samples, sampleRate: sampleRate)
+                    Task { @MainActor in
+                        self?.lastClarity = result.clarity
+                        self?.processPitch(result.frequency)
+                    }
                 }
             }
+            audioErrorMessage = nil
+        } catch {
+            // Antes se ignoraba con `try?`: el usuario se encontraba un afinador que nunca
+            // detectaba nada, sin ninguna pista de que el problema era ni siquiera haber podido
+            // arrancar la captura (permiso revocado a medias, sesión de audio ocupada por otra
+            // app...).
+            audioErrorMessage = error.localizedDescription
         }
     }
 

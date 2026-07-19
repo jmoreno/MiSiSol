@@ -21,6 +21,25 @@ nonisolated final class AudioEngine {
 
     private(set) var isRunning = false
 
+    /// Último closure pasado a `start(onBuffer:)`, recordado para poder reinstalar el tap sin que
+    /// quien llama tenga que volver a invocar `start` (p.ej. al reanudar tras una interrupción o
+    /// un cambio de ruta, ver `beginCapture`/los observers más abajo).
+    private var onBuffer: (([Float], Double) -> Void)?
+    /// Si la captura estaba activa justo antes de que empezara una interrupción (llamada, Siri...).
+    /// El sistema para el motor por su cuenta al empezar; esto es lo único que nos permite saber,
+    /// al terminar, si había que reanudarla.
+    private var wasRunningBeforeInterruption = false
+
+    /// Se invoca (en el hilo principal) si un reintento automático de captura —tras una
+    /// interrupción o un cambio de ruta— falla. `start(onBuffer:)` ya devuelve el error del primer
+    /// intento directamente (`throws`); esto cubre los reintentos posteriores, que si no,
+    /// fallarían en silencio y el usuario se quedaría sin saber por qué la app dejó de escuchar.
+    var onRestartError: ((Error) -> Void)?
+
+    private var interruptionObserver: NSObjectProtocol?
+    private var routeChangeObserver: NSObjectProtocol?
+    private var configurationChangeObserver: NSObjectProtocol?
+
     #if DEBUG
     /// Archivo abierto mientras `startDebugRecording(to:)` está activo. Solo para diagnóstico:
     /// permite capturar exactamente el mismo audio crudo que le llega a `PitchDetector` (antes de
@@ -31,6 +50,13 @@ nonisolated final class AudioEngine {
 
     init(bufferSize: AVAudioFrameCount = 4096) {
         self.bufferSize = bufferSize
+        observeSessionAndEngineChanges()
+    }
+
+    deinit {
+        [interruptionObserver, routeChangeObserver, configurationChangeObserver].forEach {
+            if let token = $0 { NotificationCenter.default.removeObserver(token) }
+        }
     }
 
     /// Estado actual del permiso de micrófono.
@@ -54,6 +80,22 @@ nonisolated final class AudioEngine {
     /// principal: quien lo use (p.ej. TunerViewModel) es responsable de saltar a @MainActor
     /// antes de tocar estado de UI.
     func start(onBuffer: @escaping ([Float], Double) -> Void) throws {
+        self.onBuffer = onBuffer
+        try beginCapture()
+    }
+
+    /// Detiene la captura y libera el tap.
+    func stop() {
+        guard isRunning else { return }
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        isRunning = false
+    }
+
+    /// Configura la sesión de audio, instala el tap y arranca el motor. Extraído de `start` para
+    /// poder repetirlo internamente (reanudar tras una interrupción, reinstalar el tap tras un
+    /// cambio de ruta) sin depender de que quien llama vuelva a invocar `start(onBuffer:)`.
+    private func beginCapture() throws {
         stop()
 
         let session = AVAudioSession.sharedInstance()
@@ -89,7 +131,7 @@ nonisolated final class AudioEngine {
             guard let channelData = buffer.floatChannelData else { return }
             let frameLength = Int(buffer.frameLength)
             let samples = Array(UnsafeBufferPointer(start: channelData[0], count: frameLength))
-            onBuffer(samples, format.sampleRate)
+            self?.onBuffer?(samples, format.sampleRate)
         }
 
         engine.prepare()
@@ -97,12 +139,101 @@ nonisolated final class AudioEngine {
         isRunning = true
     }
 
-    /// Detiene la captura y libera el tap.
-    func stop() {
+    // MARK: - Interrupciones, cambios de ruta y de configuración del motor
+
+    /// Registra los observers de `AVAudioSession`/`AVAudioEngine` que permiten reaccionar a
+    /// eventos que están completamente fuera de nuestro control: una llamada entrante, Siri,
+    /// conectar o desconectar unos auriculares... Sin esto, cualquiera de ellos deja el afinador
+    /// "sordo" hasta que el usuario cierra y reabre la app.
+    ///
+    /// Los tres llegan en un hilo arbitrario (no necesariamente el principal): se despachan al
+    /// hilo principal antes de tocar `isRunning`/`onBuffer` o de llamar a `beginCapture()`, para
+    /// serializarlos con las llamadas a `start()`/`stop()` (que en esta app siempre llegan desde
+    /// el hilo principal) sin necesitar un lock nuevo.
+    private func observeSessionAndEngineChanges() {
+        let center = NotificationCenter.default
+        let session = AVAudioSession.sharedInstance()
+
+        interruptionObserver = center.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: session,
+            queue: nil
+        ) { [weak self] notification in
+            DispatchQueue.main.async { self?.handleInterruption(notification) }
+        }
+
+        routeChangeObserver = center.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: session,
+            queue: nil
+        ) { [weak self] notification in
+            DispatchQueue.main.async { self?.handleRouteChange(notification) }
+        }
+
+        // Con `object: engine` (no `nil`): esta notificación la puede disparar cualquier
+        // AVAudioEngine de la app (también el de ToneGenerator), y solo nos interesa la nuestra.
+        configurationChangeObserver = center.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: nil
+        ) { [weak self] _ in
+            DispatchQueue.main.async { self?.restartIfRunning() }
+        }
+    }
+
+    private func handleInterruption(_ notification: Notification) {
+        guard let info = notification.userInfo,
+              let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+
+        switch type {
+        case .began:
+            // El sistema para la captura por su cuenta al empezar la interrupción; solo
+            // reflejamos el estado y recordamos si había que reanudarla al terminar.
+            wasRunningBeforeInterruption = isRunning
+            isRunning = false
+        case .ended:
+            defer { wasRunningBeforeInterruption = false }
+            guard wasRunningBeforeInterruption else { return }
+            let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt
+            let options = optionsValue.map(AVAudioSession.InterruptionOptions.init(rawValue:)) ?? []
+            guard options.contains(.shouldResume) else { return }
+            attemptRestart()
+        @unknown default:
+            break
+        }
+    }
+
+    private func handleRouteChange(_ notification: Notification) {
+        guard isRunning,
+              let info = notification.userInfo,
+              let reasonValue = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else { return }
+
+        switch reason {
+        case .newDeviceAvailable, .oldDeviceUnavailable, .routeConfigurationChange, .override:
+            // El formato real del hardware (sample rate, canales) puede haber cambiado con la
+            // nueva ruta: reinstalamos el tap para que lo recoja, en vez de seguir con el antiguo.
+            attemptRestart()
+        default:
+            // p.ej. `.categoryChange`: lo disparamos nosotros mismos al (re)configurar la sesión
+            // en `beginCapture`, no es un cambio real de hardware — reaccionar también aquí
+            // provocaría un bucle de reinicios.
+            break
+        }
+    }
+
+    private func restartIfRunning() {
         guard isRunning else { return }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        isRunning = false
+        attemptRestart()
+    }
+
+    private func attemptRestart() {
+        do {
+            try beginCapture()
+        } catch {
+            onRestartError?(error)
+        }
     }
 
     #if DEBUG
