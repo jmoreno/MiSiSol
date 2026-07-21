@@ -59,7 +59,7 @@ struct Tuning: Equatable, Codable {
         switch instrument {
         case .guitar:
             return [dropD]
-        case .bass, .ukulele:
+        case .bass, .ukulele, .voice:
             return []
         }
     }

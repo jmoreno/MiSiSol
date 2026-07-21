@@ -27,8 +27,16 @@ struct Note: Equatable, Hashable, Codable {
     /// Distancia en semitonos respecto a A4 (puede ser negativa).
     let semitonesFromA4: Int
 
-    /// Nombre completo de la nota, ej. "E2".
+    /// Nombre completo de la nota en notación anglosajona (siempre la interna, ver `name`), ej. "E2".
     var fullName: String { "\(name)\(octave)" }
+
+    /// Nombre completo de la nota en la convención de notación elegida, ej. "Mi2" en notación
+    /// latina para la misma nota que `fullName` muestra como "E2". Solo cambia cómo se presenta:
+    /// `name` (usado en igualdad, persistencia y cálculo de semitonos) siempre es anglosajón.
+    func fullName(using style: NoteNamingStyle) -> String {
+        guard let index = Note.noteNames.firstIndex(of: name) else { return fullName }
+        return "\(style.noteNames[index])\(octave)"
+    }
 
     /// Frecuencia de esta nota en Hz.
     var frequency: Double { Note.frequency(forSemitonesFromA4: semitonesFromA4) }
@@ -64,5 +72,30 @@ struct Note: Equatable, Hashable, Codable {
         let nearestNote = note(forSemitonesFromA4: nearestSemitone)
         let cents = (exactSemitones - Double(nearestSemitone)) * 100
         return (nearestNote, cents)
+    }
+}
+
+/// Convención de nombres de nota para mostrar en la interfaz, elegible en ajustes y persistida
+/// con `@AppStorage`. El nombre interno de `Note` (usado en igualdad, persistencia y cálculo de
+/// semitonos) siempre es anglosajón; esto solo afecta a cómo se presenta en pantalla.
+enum NoteNamingStyle: String, CaseIterable, Identifiable, Codable {
+    case anglo
+    case latin
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .anglo: return "C-D-E"
+        case .latin: return "Do-Re-Mi"
+        }
+    }
+
+    /// Nombres de las 12 notas cromáticas en este estilo, en el mismo orden que `Note.noteNames`.
+    fileprivate var noteNames: [String] {
+        switch self {
+        case .anglo: return Note.noteNames
+        case .latin: return ["Do", "Do#", "Re", "Re#", "Mi", "Fa", "Fa#", "Sol", "Sol#", "La", "La#", "Si"]
+        }
     }
 }

@@ -12,6 +12,7 @@ struct TuningPicker: View {
     let viewModel: TunerViewModel
     @Environment(\.dismiss) private var dismiss
     @AppStorage("gaugeStyle") private var gaugeStyle: GaugeStyle = .dial
+    @AppStorage("noteNamingStyle") private var noteNamingStyle: NoteNamingStyle = .anglo
 
     @State private var customNotes: [Note]
 
@@ -28,13 +29,19 @@ struct TuningPicker: View {
         _customNotes = State(initialValue: viewModel.tuning.strings)
     }
 
+    /// La voz no tiene afinaciones estándar ni transposición: solo una nota objetivo elegible.
+    private var isVoice: Bool { viewModel.instrument == .voice }
+
     var body: some View {
         NavigationStack {
             List {
-                presetSection
-                transposeSection
+                if !isVoice {
+                    presetSection
+                    transposeSection
+                }
                 customSection
                 appearanceSection
+                noteNamingSection
             }
             .scrollContentBackground(.hidden)
             .background(TunerTheme.background)
@@ -71,7 +78,7 @@ struct TuningPicker: View {
                 VStack(alignment: .leading) {
                     Text(preset.name)
                         .foregroundStyle(TunerTheme.textPrimary)
-                    Text(preset.strings.map(\.fullName).joined(separator: " · "))
+                    Text(preset.strings.map { $0.fullName(using: noteNamingStyle) }.joined(separator: " · "))
                         .font(.caption)
                         .foregroundStyle(TunerTheme.textSecondary)
                 }
@@ -127,12 +134,12 @@ struct TuningPicker: View {
         Section {
             ForEach(customNotes.indices, id: \.self) { index in
                 HStack {
-                    Text("Cuerda \(index + 1)")
+                    Text(isVoice ? "Nota objetivo" : "Cuerda \(index + 1)")
                         .foregroundStyle(TunerTheme.textPrimary)
                     Spacer()
                     Picker("Nota", selection: $customNotes[index]) {
                         ForEach(Self.selectableNotes, id: \.self) { note in
-                            Text(note.fullName).tag(note)
+                            Text(note.fullName(using: noteNamingStyle)).tag(note)
                         }
                     }
                     .labelsHidden()
@@ -182,6 +189,24 @@ struct TuningPicker: View {
             .listRowBackground(TunerTheme.surface)
         } header: {
             Text("Apariencia del indicador").foregroundStyle(TunerTheme.textSecondary)
+        }
+    }
+
+    private var noteNamingSection: some View {
+        Section {
+            HStack(spacing: 6) {
+                ForEach(NoteNamingStyle.allCases) { style in
+                    Button {
+                        noteNamingStyle = style
+                    } label: {
+                        TunerChip(label: style.displayName, isSelected: noteNamingStyle == style)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .listRowBackground(TunerTheme.surface)
+        } header: {
+            Text("Nombres de las notas").foregroundStyle(TunerTheme.textSecondary)
         }
     }
 

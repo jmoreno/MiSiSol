@@ -13,6 +13,10 @@ struct TunerView: View {
     @State private var showingTuningPicker = false
     @State private var showingMicrophoneAlert = false
     @AppStorage("gaugeStyle") private var gaugeStyle: GaugeStyle = .dial
+    @AppStorage("noteNamingStyle") private var noteNamingStyle: NoteNamingStyle = .anglo
+    #if DEBUG
+    @State private var showDebugDiagnostics = false
+    #endif
 
     var body: some View {
         ZStack {
@@ -31,37 +35,46 @@ struct TunerView: View {
 
                 Spacer(minLength: 0)
 
-                Group {
-                    switch gaugeStyle {
-                    case .dial:
-                        DialGaugeView(
-                            cents: viewModel.centsOffset,
-                            status: viewModel.status,
-                            margin: viewModel.inTuneCentsMargin
-                        )
-                        .frame(height: 150)
-                    case .bar:
-                        BarGaugeView(
-                            cents: viewModel.centsOffset,
-                            status: viewModel.status,
-                            margin: viewModel.inTuneCentsMargin
-                        )
-                        .frame(height: 28)
+                // La voz no tiene una nota objetivo fija que "afinar" (no hay cuerdas): el
+                // indicador de cents no aplica, así que en ese modo solo se muestra la nota y
+                // frecuencia detectadas (ver `detectedNoteDisplay`).
+                if viewModel.instrument != .voice {
+                    Group {
+                        switch gaugeStyle {
+                        case .dial:
+                            DialGaugeView(
+                                cents: viewModel.centsOffset,
+                                status: viewModel.status,
+                                margin: viewModel.inTuneCentsMargin
+                            )
+                            .frame(height: 150)
+                        case .bar:
+                            BarGaugeView(
+                                cents: viewModel.centsOffset,
+                                status: viewModel.status,
+                                margin: viewModel.inTuneCentsMargin
+                            )
+                            .frame(height: 28)
+                        }
                     }
+                    .padding(.horizontal, 12)
                 }
-                .padding(.horizontal, 12)
 
                 detectedNoteDisplay
 
                 #if DEBUG
-                debugDiagnostics
+                if showDebugDiagnostics {
+                    debugDiagnostics
+                }
                 #endif
 
                 Spacer(minLength: 0)
 
-                stringSelector
+                if viewModel.instrument != .voice {
+                    stringSelector
 
-                modePicker
+                    modePicker
+                }
 
                 referenceNoteButton
             }
@@ -89,6 +102,11 @@ struct TunerView: View {
             Text("MiSiSol")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(TunerTheme.textPrimary)
+                #if DEBUG
+                .onLongPressGesture(minimumDuration: 1.5) {
+                    showDebugDiagnostics.toggle()
+                }
+                #endif
             Spacer()
             Button {
                 showingTuningPicker = true
@@ -191,7 +209,7 @@ struct TunerView: View {
                     Button {
                         viewModel.selectString(at: index)
                     } label: {
-                        TunerChip(label: note.fullName, isSelected: index == viewModel.selectedStringIndex)
+                        TunerChip(label: note.fullName(using: noteNamingStyle), isSelected: index == viewModel.selectedStringIndex)
                     }
                     .buttonStyle(.plain)
                 }
@@ -209,18 +227,28 @@ struct TunerView: View {
 
     private var detectedNoteDisplay: some View {
         VStack(spacing: 6) {
-            Text(viewModel.detectedNote?.fullName ?? "–")
+            Text(viewModel.detectedNote?.fullName(using: noteNamingStyle) ?? "–")
                 .font(.system(size: 56, weight: .semibold, design: .rounded))
                 .foregroundStyle(TunerTheme.textPrimary)
                 .contentTransition(.numericText())
             if let frequency = viewModel.detectedFrequency {
-                Text(frequencyAndCentsText(frequency: frequency))
-                    .font(.system(size: 13))
-                    .foregroundStyle(viewModel.status.color)
+                if viewModel.instrument == .voice {
+                    Text(String(format: "%.1f Hz", frequency))
+                        .font(.system(size: 13))
+                        .foregroundStyle(TunerTheme.textSecondary)
+                } else {
+                    Text(frequencyAndCentsText(frequency: frequency))
+                        .font(.system(size: 13))
+                        .foregroundStyle(viewModel.status.color)
+                }
             } else {
-                Text("Toca la cuerda \(viewModel.targetNote?.fullName ?? "")")
-                    .font(.system(size: 13))
-                    .foregroundStyle(TunerTheme.textSecondary)
+                Text(
+                    viewModel.instrument == .voice
+                        ? "Canta o tararea una nota"
+                        : "Toca la cuerda \(viewModel.targetNote?.fullName(using: noteNamingStyle) ?? "")"
+                )
+                .font(.system(size: 13))
+                .foregroundStyle(TunerTheme.textSecondary)
             }
         }
     }
@@ -241,7 +269,7 @@ struct TunerView: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: viewModel.isPlayingReferenceNote ? "speaker.slash.fill" : "play.fill")
-                Text(viewModel.isPlayingReferenceNote ? "Detener" : "Reproducir \(viewModel.targetNote?.fullName ?? "")")
+                Text(viewModel.isPlayingReferenceNote ? "Detener" : "Reproducir \(viewModel.targetNote?.fullName(using: noteNamingStyle) ?? "")")
             }
             .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(TunerTheme.accentText)

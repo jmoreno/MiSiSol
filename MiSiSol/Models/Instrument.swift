@@ -10,6 +10,10 @@ enum Instrument: String, CaseIterable, Identifiable, Codable {
     case guitar
     case bass
     case ukulele
+    /// No es un instrumento de cuerda: identifica la nota/frecuencia de una voz cantada. Se
+    /// modela con una única "cuerda" (la nota objetivo elegible) para reutilizar toda la
+    /// infraestructura de afinación y persistencia existente en vez de duplicarla.
+    case voice
 
     var id: String { rawValue }
 
@@ -18,6 +22,7 @@ enum Instrument: String, CaseIterable, Identifiable, Codable {
         case .guitar: return "Guitarra"
         case .bass: return "Bajo"
         case .ukulele: return "Ukelele"
+        case .voice: return "Voz"
         }
     }
 
@@ -29,6 +34,7 @@ enum Instrument: String, CaseIterable, Identifiable, Codable {
         case .guitar: return [("E", 2), ("A", 2), ("D", 3), ("G", 3), ("B", 3), ("E", 4)]
         case .bass: return [("E", 1), ("A", 1), ("D", 2), ("G", 2)]
         case .ukulele: return [("G", 4), ("C", 4), ("E", 4), ("A", 4)]
+        case .voice: return [("A", 4)]
         }
     }
 
