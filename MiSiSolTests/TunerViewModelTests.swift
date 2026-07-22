@@ -233,4 +233,35 @@ final class TunerViewModelTests: XCTestCase {
         vm.processPitch(Float(clearlyCloserToA2))
         XCTAssertEqual(vm.selectedStringIndex, 1)
     }
+
+    // MARK: - Voz (afinador cromático: cents contra la nota más cercana, no una objetivo fija)
+
+    func testVoiceComparesAgainstNearestChromaticNoteRegardlessOfTargetNote() {
+        let vm = makeViewModel(instrument: .voice, inTuneCentsMargin: 5, smoothingWindowSize: 1)
+        // La nota objetivo (para el botón de referencia) es A4 por defecto, pero al cantar un C4
+        // el gauge debe compararse contra C4 (la nota más cercana), no contra A4.
+        XCTAssertEqual(vm.targetNote?.fullName, "A4")
+
+        let c4 = Note.make(name: "C", octave: 4)!.frequency
+        vm.processPitch(Float(c4))
+
+        XCTAssertEqual(vm.detectedNote?.fullName, "C4")
+        XCTAssertEqual(vm.status, .inTune)
+        XCTAssertEqual(vm.centsOffset, 0, accuracy: 0.5)
+    }
+
+    func testVoiceReportsSharpOrFlatRelativeToNearestNoteAsPitchGlides() {
+        let vm = makeViewModel(instrument: .voice, inTuneCentsMargin: 5, smoothingWindowSize: 1)
+        let c4 = Note.make(name: "C", octave: 4)!.frequency
+
+        let flat = c4 * pow(2.0, -20.0 / 1200.0)
+        vm.processPitch(Float(flat))
+        XCTAssertEqual(vm.status, .tooLow)
+        XCTAssertEqual(vm.detectedNote?.fullName, "C4") // sigue más cerca de C4 que de B3
+
+        let sharp = c4 * pow(2.0, 20.0 / 1200.0)
+        vm.processPitch(Float(sharp))
+        XCTAssertEqual(vm.status, .tooHigh)
+        XCTAssertEqual(vm.detectedNote?.fullName, "C4")
+    }
 }

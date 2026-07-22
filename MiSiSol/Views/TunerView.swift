@@ -35,30 +35,28 @@ struct TunerView: View {
 
                 Spacer(minLength: 0)
 
-                // La voz no tiene una nota objetivo fija que "afinar" (no hay cuerdas): el
-                // indicador de cents no aplica, así que en ese modo solo se muestra la nota y
-                // frecuencia detectadas (ver `detectedNoteDisplay`).
-                if viewModel.instrument != .voice {
-                    Group {
-                        switch gaugeStyle {
-                        case .dial:
-                            DialGaugeView(
-                                cents: viewModel.centsOffset,
-                                status: viewModel.status,
-                                margin: viewModel.inTuneCentsMargin
-                            )
-                            .frame(height: 150)
-                        case .bar:
-                            BarGaugeView(
-                                cents: viewModel.centsOffset,
-                                status: viewModel.status,
-                                margin: viewModel.inTuneCentsMargin
-                            )
-                            .frame(height: 28)
-                        }
+                // En Voz el gauge compara contra la nota cromática más cercana en vez de contra
+                // una nota objetivo fija (ver `TunerViewModel.processPitch`), como un afinador
+                // cromático clásico.
+                Group {
+                    switch gaugeStyle {
+                    case .dial:
+                        DialGaugeView(
+                            cents: viewModel.centsOffset,
+                            status: viewModel.status,
+                            margin: viewModel.inTuneCentsMargin
+                        )
+                        .frame(height: 150)
+                    case .bar:
+                        BarGaugeView(
+                            cents: viewModel.centsOffset,
+                            status: viewModel.status,
+                            margin: viewModel.inTuneCentsMargin
+                        )
+                        .frame(height: 28)
                     }
-                    .padding(.horizontal, 12)
                 }
+                .padding(.horizontal, 12)
 
                 detectedNoteDisplay
 
@@ -232,15 +230,9 @@ struct TunerView: View {
                 .foregroundStyle(TunerTheme.textPrimary)
                 .contentTransition(.numericText())
             if let frequency = viewModel.detectedFrequency {
-                if viewModel.instrument == .voice {
-                    Text(String(format: "%.1f Hz", frequency))
-                        .font(.system(size: 13))
-                        .foregroundStyle(TunerTheme.textSecondary)
-                } else {
-                    Text(frequencyAndCentsText(frequency: frequency))
-                        .font(.system(size: 13))
-                        .foregroundStyle(viewModel.status.color)
-                }
+                Text(frequencyAndCentsText(frequency: frequency))
+                    .font(.system(size: 13))
+                    .foregroundStyle(viewModel.status.color)
             } else {
                 Text(
                     viewModel.instrument == .voice

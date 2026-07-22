@@ -13,10 +13,17 @@ import AVFoundation
 // el runtime de concurrencia intentaría intervenir ese closure en tiempo real, lo cual no es seguro.
 nonisolated final class ToneGenerator {
 
-    private let engine = AVAudioEngine()
+    // No `private`: los tests necesitan poder parar el motor directamente para simular lo que
+    // hace el sistema cuando `AudioEngine` reclama la sesión de audio compartida para escuchar
+    // (ver `ToneGeneratorTests.testPlayRestartsEngineIfItWasStoppedExternally`), sin depender de
+    // reproducir esa interacción real entre sesiones de audio dentro de un test.
+    let engine = AVAudioEngine()
     private let sampleRate: Double
     private let state = TonePhaseState()
-    private var isEngineRunning = false
+    /// Si el nodo de render ya está `attach`ado al motor. A diferencia de si el motor está
+    /// arrancado (`engine.isRunning`, que puede cambiar por causas externas), esto solo pasa una
+    /// vez: intentar volver a `attach`/`connect` el mismo nodo lanzaría una excepción.
+    private var isNodeAttached = false
 
     private(set) var isPlaying = false
     private(set) var currentFrequency: Float?
@@ -84,9 +91,29 @@ nonisolated final class ToneGenerator {
         try? session.setActive(true)
     }
 
+    /// Arranca el motor si hace falta. Se llama en cada `play()`, no solo la primera vez: cuando
+    /// `AudioEngine` retoma la sesión compartida para escuchar (categoría `.record`), el sistema
+    /// para este motor por su cuenta (dos categorías de sesión no pueden estar activas a la vez),
+    /// y sin comprobar el estado real (`engine.isRunning`) en vez de una bandera propia, una
+    /// segunda nota de referencia se quedaría muda: el nodo seguiría "attachado" pero el motor ya
+    /// no, y nada volvería a arrancarlo.
     private func ensureEngineIsRunning() {
-        guard !isEngineRunning else { return }
+        if !isNodeAttached {
+            attachRenderNode()
+            isNodeAttached = true
+        }
 
+        guard !engine.isRunning else { return }
+        do {
+            engine.prepare()
+            try engine.start()
+        } catch {
+            // Se reintentará en el próximo play(): el nodo ya sigue attachado, no hace falta
+            // volver a crearlo.
+        }
+    }
+
+    private func attachRenderNode() {
         // El formato se pide al propio mainMixerNode en vez de fijarlo a 44.1kHz: el sample rate
         // real del hardware varía según el dispositivo y la ruta de audio activa (auriculares,
         // Bluetooth...). Usar un formato que no coincide con el del engine es una causa habitual
@@ -125,14 +152,6 @@ nonisolated final class ToneGenerator {
 
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: format)
-
-        do {
-            engine.prepare()
-            try engine.start()
-            isEngineRunning = true
-        } catch {
-            engine.detach(node)
-        }
     }
 }
 

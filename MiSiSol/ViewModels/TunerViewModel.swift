@@ -261,7 +261,17 @@ nonisolated final class TunerViewModel {
         }
         let smoothed = Self.median(of: recentFrequencies)
         detectedFrequency = smoothed
-        detectedNote = Note.closest(to: Double(smoothed)).note
+
+        let closest = Note.closest(to: Double(smoothed))
+        detectedNote = closest.note
+
+        // La voz no tiene cuerdas ni una nota objetivo fija que afinar: se comporta como un
+        // afinador cromático clásico, comparando siempre contra la nota cromática más cercana a
+        // lo que se está cantando en cada instante (en vez de contra una nota elegida a mano).
+        if instrument == .voice {
+            updateTuningStatus(forCents: closest.cents)
+            return
+        }
 
         if mode == .automatic {
             selectNearestString(toFrequency: smoothed)
@@ -274,6 +284,10 @@ nonisolated final class TunerViewModel {
         }
 
         let cents = 1200 * log2(Double(smoothed) / targetNote.frequency)
+        updateTuningStatus(forCents: cents)
+    }
+
+    private func updateTuningStatus(forCents cents: Double) {
         centsOffset = cents
         if abs(cents) <= inTuneCentsMargin {
             status = .inTune

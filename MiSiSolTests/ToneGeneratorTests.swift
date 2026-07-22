@@ -3,6 +3,7 @@
 //  MiSiSolTests
 //
 
+import AVFoundation
 import XCTest
 @testable import MiSiSol
 
@@ -91,5 +92,29 @@ final class ToneGeneratorTests: XCTestCase {
         generator.stop()
         XCTAssertFalse(generator.isPlaying)
         XCTAssertNil(generator.currentFrequency)
+    }
+
+    /// Reproduce el bug real reportado: tras parar la nota de referencia, `TunerViewModel` le
+    /// devuelve la sesión de audio a `AudioEngine` para reanudar la escucha (categoría `.record`),
+    /// lo que para el motor de `ToneGenerator` por su cuenta (dos categorías de sesión no pueden
+    /// estar activas a la vez) sin avisar a `ToneGenerator`. Antes del fix, `ensureEngineIsRunning`
+    /// se basaba en una bandera propia que nunca se enteraba de esto, así que una segunda nota de
+    /// referencia se quedaba muda. Aquí se simula ese "parón externo" llamando a `engine.stop()`
+    /// directamente, sin necesidad de reproducir la interacción real entre sesiones de audio.
+    func testPlayRestartsEngineIfItWasStoppedExternally() {
+        let generator = ToneGenerator()
+
+        generator.play(frequency: 440)
+        XCTAssertTrue(generator.engine.isRunning)
+
+        generator.stop()
+        generator.engine.stop()
+        XCTAssertFalse(generator.engine.isRunning)
+
+        generator.play(frequency: 440)
+        XCTAssertTrue(
+            generator.engine.isRunning,
+            "Una segunda nota de referencia debe volver a arrancar el motor aunque el sistema lo hubiera parado por su cuenta"
+        )
     }
 }
